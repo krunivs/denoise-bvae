@@ -1,3 +1,4 @@
+# denoise_bayes_vae/loss.py
 # -*- encoding: utf-8 -*-
 from typing import Tuple, List
 

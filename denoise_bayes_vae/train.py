@@ -1,3 +1,4 @@
+# denoise_bayes_vae/train.py
 # -*- encoding: utf-8 -*-
 
 import os

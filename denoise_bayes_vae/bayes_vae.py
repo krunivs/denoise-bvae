@@ -1,3 +1,6 @@
+# denoise_bayes_vae/bayes_vae.py
+# -*- encoding: utf-8 -*-
+
 import torch
 import torch.nn.functional as F
 from torch import nn

@@ -1,3 +1,4 @@
+# denoise_bayes_vae/test.py
 # -*- encoding: utf-8 -*-
 
 import time

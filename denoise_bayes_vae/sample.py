@@ -1,3 +1,6 @@
+# denoise_bayes_vae/sample.py
+# -*- encoding: utf-8 -*-
+
 import torch
 
 def sample_latent(mu, logvar, dist_type='gaussian', df=3.0):

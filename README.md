@@ -62,7 +62,7 @@ python main.py \
 | `--manifest` | Path to the trained model manifest file. |
 | `--test_input` | Input noisy WAV file for testing (single file). |
 
-## 🚀 설치 방법
+## 🚀 Python packages Installation
 ### CPU-Only
 ```
 pip install torch torchvision torchaudio

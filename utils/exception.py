@@ -1,3 +1,6 @@
+# utils/exception.py
+# -*- encoding: utf-8 -*-
+
 import traceback
 
 

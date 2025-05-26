@@ -1,3 +1,6 @@
+# utils/audio_qc.py
+# -*- encoding: utf-8 -*-
+
 import numpy as np
 import torch
 from pesq import pesq  # pip install pesq
