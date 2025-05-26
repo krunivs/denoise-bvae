@@ -111,10 +111,13 @@ class ConvPostnet(nn.Module):
         self.output_proj = nn.Linear(channels, input_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.input_proj(x).transpose(1, 2)     # (B, T) → (B, C, T)
-        x = self.conv_net(x)                       # (B, C, T)
-        x = x.transpose(1, 2)                      # (B, C, T) → (B, T, C)
-        x = self.output_proj(x).squeeze(-1)        # (B, T, C) → (B, T)
+        # x: [B, T]
+        x = self.input_proj(x).unsqueeze(1)   # → [B, 1, C]
+        x = x.transpose(1, 2)                 # → [B, C, 1]
+        x = self.conv_net(x)                 # → [B, C, 1]
+        x = x.transpose(1, 2).squeeze(1)      # → [B, C]
+        x = self.output_proj(x)              # → [B, T]
+
         return x
 
 class Encoder(nn.Module):
@@ -224,6 +227,9 @@ class Decoder(nn.Module):
             logger.error("NaN detected in final decoder output!")
 
         return combined
+
+    def kl_loss(self):
+        return self.fc1.kl_loss() + self.fc2.kl_loss()
 
 
 class BayesianVAE(nn.Module):
