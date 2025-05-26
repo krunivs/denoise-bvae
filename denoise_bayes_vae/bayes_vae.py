@@ -189,8 +189,7 @@ class Decoder(nn.Module):
             nn.Linear(768, 512),
             nn.SiLU(),
             nn.Dropout(0.1),
-            nn.Linear(512, output_dim),
-            nn.Tanh()  # 안정된 출력 범위
+            nn.Linear(512, output_dim)
         )
         self.postnet = ConvPostnet(output_dim)
 
@@ -220,10 +219,10 @@ class Decoder(nn.Module):
         if self.training and (alpha.item() < 0.1 or alpha.item() > 0.9):
             logger.warning(f"[Gating] alpha extreme: alpha={alpha.item():.3f}")
 
-        combined = (1 - alpha) * out + alpha * refined
+        combined = out + alpha * (refined - out)  # Residual로 처리하여 collapse 완화
 
         if self.use_skip:
-            combined += 0.2 * self.skip_z(z)
+            combined += 0.5 * self.skip_z(z)
 
         if torch.isnan(combined).any():
             logger.error("NaN detected in final decoder output!")

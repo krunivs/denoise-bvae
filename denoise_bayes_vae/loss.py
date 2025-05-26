@@ -132,7 +132,7 @@ def adjust_stft_scale(
         stft_scale = max(0.05, stft_scale * 0.9)
 
     elif stft_value < target_stft * 0.5:
-        stft_scale = min(0.10, stft_scale * 1.05)  # ← increase upper bound from 0.6 to 0.10
+        stft_scale = min(0.30, stft_scale * 1.10)
 
     return stft_scale
 
