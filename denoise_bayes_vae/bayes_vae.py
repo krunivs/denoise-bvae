@@ -14,7 +14,7 @@ class BayesianLinear(nn.Module):
     Args:
         in_features (int): Number of input features.
         out_features (int): Number of output features.
-        dist_type (str): Distribution type ('gaussian' or 'student_t').
+        dist_type (str): Distribution type ('gaussian' or 'student-t').
         df (float): Degrees of freedom for student-t (if used).
     """
     def __init__(self, in_features, out_features, dist_type='gaussian', df=3.0):
@@ -143,7 +143,7 @@ class Decoder(nn.Module):
     Args:
         latent_dim (int): Latent space dimensionality.
         output_dim (int): Output waveform dimensionality.
-        dist_type (str): Distribution type ('gaussian' or 'student_t').
+        dist_type (str): Distribution type ('gaussian' or 'student-t').
         df (float): Degrees of freedom for student-t distribution.
         use_skip (bool): Whether to use skip_z connection in final output
     """
@@ -253,7 +253,7 @@ class BayesianVAE(nn.Module):
         """
         :param input_dim: (int) input dimension
         :param latent_dim: (int) latent dimension
-        :param dist_type: (str) probability distribution type (either 'gaussian' or 'student_t')
+        :param dist_type: (str) probability distribution type (either 'gaussian' or 'student-t')
         :param df: (float) degrees of freedom
         """
         super().__init__()

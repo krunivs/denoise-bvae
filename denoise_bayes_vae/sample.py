@@ -5,13 +5,13 @@ def sample_latent(mu, logvar, dist_type='gaussian', df=3.0):
     sampling function
     :param mu: mean tensor
     :param logvar: log variance tensor
-    :param dist_type: (str) probability distribution type (either 'gaussian' or 'student_t')
+    :param dist_type: (str) probability distribution type (either 'gaussian' or 'student-t')
     :param df: (float) degrees of freedom
     :return:
     """
     if dist_type == 'gaussian':
         return sample_gaussian(mu, logvar)
-    elif dist_type == 'student_t':
+    elif dist_type == 'student-t':
         return sample_student_t(mu, logvar, df=df)
     else:
         raise ValueError('Unsupported distribution type: {}'.format(dist_type))
