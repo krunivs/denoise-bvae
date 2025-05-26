@@ -95,6 +95,27 @@ class Postnet(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+class ConvPostnet(nn.Module):
+    def __init__(self, input_dim: int, channels: int = 64, kernel_size: int = 5, num_layers: int = 5):
+        super().__init__()
+        self.input_proj = nn.Linear(input_dim, channels)
+        layers = []
+        for _ in range(num_layers):
+            layers.append(nn.Sequential(
+                nn.Conv1d(channels, channels, kernel_size, padding=kernel_size // 2),
+                nn.BatchNorm1d(channels),
+                nn.ReLU(),
+                nn.Dropout(0.2)
+            ))
+        self.conv_net = nn.Sequential(*layers)
+        self.output_proj = nn.Linear(channels, input_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.input_proj(x).transpose(1, 2)     # (B, T) → (B, C, T)
+        x = self.conv_net(x)                       # (B, C, T)
+        x = x.transpose(1, 2)                      # (B, C, T) → (B, T, C)
+        x = self.output_proj(x).squeeze(-1)        # (B, T, C) → (B, T)
+        return x
 
 class Encoder(nn.Module):
     """
@@ -137,21 +158,12 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    """
-    Improved Decoder for Bayesian VAE with enhanced diversity and postnet refinement.
-
-    Args:
-        latent_dim (int): Latent space dimensionality.
-        output_dim (int): Output waveform dimensionality.
-        dist_type (str): Distribution type ('gaussian' or 'student-t').
-        df (float): Degrees of freedom for student-t distribution.
-        use_skip (bool): Whether to use skip_z connection in final output
-    """
     def __init__(self, latent_dim, output_dim, dist_type='gaussian', df=3.0, use_skip=True):
         super().__init__()
         self.dist_type = dist_type
         self.df = df
         self.use_skip = use_skip
+        self.output_dim = output_dim
 
         self.fc1 = BayesianLinear(latent_dim, 256, dist_type, df)
         self.fc2 = BayesianLinear(256 + 128, 512, dist_type, df)
@@ -160,15 +172,12 @@ class Decoder(nn.Module):
             nn.Linear(latent_dim, 128),
             nn.ReLU()
         )
-
         self.z_deep = nn.Sequential(
             nn.Linear(latent_dim, 128),
             nn.SiLU(),
             nn.Linear(128, 128)
         )
-
         self.skip_z = nn.Linear(latent_dim, output_dim)
-
         self.resblock = ResidualBlock(768)
 
         self.output_layer = nn.Sequential(
@@ -178,28 +187,16 @@ class Decoder(nn.Module):
             nn.Linear(512, output_dim)
         )
 
-        self.postnet = Postnet(768)
-        self.final_proj = nn.Linear(768, output_dim)
+        self.postnet = ConvPostnet(output_dim)
 
-        # Learnable gate: [0, 1] via sigmoid
-        self.alpha = nn.Parameter(torch.tensor(0.5))  # initialized at 0.5
+        self.alpha = nn.Parameter(torch.tensor(0.5))  # Learnable gate
 
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
                 nn.init.constant_(m.bias, 0.0)
 
-
     def forward(self, z):
-        """
-        Forward pass of the decoder.
-
-        Args:
-            z (Tensor): Latent vector (B, latent_dim)
-
-        Returns:
-            Tensor: Reconstructed waveform (B, output_dim)
-        """
         z_proj = self.z_proj(z)
         z_deep = self.z_deep(z)
 
@@ -211,38 +208,22 @@ class Decoder(nn.Module):
         res = self.resblock(fused)
         res = F.dropout(res, p=0.25, training=self.training)
 
-        out = self.output_layer(res)
-        refined = self.postnet(res)  # [B, 768]
-        refined = self.final_proj(refined)  # [B, output_dim]
+        out = self.output_layer(res)        # [B, output_dim]
+        refined = self.postnet(out)         # Postnet now operates directly on output
 
-        if torch.isnan(out).any():
-            logger.error("NaN detected in decoder output!")
-        if out.std() < 1e-3:
-            logger.warning(f"[Collapse] decoder output std too low: {out.std():.6f}")
-
-        # Gated refinement
         alpha = torch.sigmoid(self.alpha)
+        if self.training and (alpha.item() < 0.1 or alpha.item() > 0.9):
+            logger.warning(f"[Gating] alpha extreme: alpha={alpha.item():.3f}")
+
         combined = (1 - alpha) * out + alpha * refined
 
-        if self.training and alpha.item() < 0.1:
-            logger.warning(f"[Gating] alpha too low → decoder dominates: alpha={alpha.item():.3f}")
-        elif self.training and alpha.item() > 0.9:
-            logger.warning(f"[Gating] alpha too high → postnet dominates: alpha={alpha.item():.3f}")
-
-        # Optional skip connection
         if self.use_skip:
             combined += 0.2 * self.skip_z(z)
 
+        if torch.isnan(combined).any():
+            logger.error("NaN detected in final decoder output!")
+
         return combined
-
-    def kl_loss(self):
-        """
-        Compute total KL divergence from Bayesian layers.
-
-        Returns:
-            Tensor: Scalar KL loss
-        """
-        return self.fc1.kl_loss() + self.fc2.kl_loss()
 
 
 class BayesianVAE(nn.Module):
