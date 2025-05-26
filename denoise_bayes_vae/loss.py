@@ -226,9 +226,8 @@ def adjust_perceptual_scale(
     elif perceptual_value < target_perceptual * 0.5:
         perceptual_scale = min(max_scale, perceptual_scale * 1.10)
 
-    logger.debug(
-        f"[Perceptual scale adjust] value={perceptual_value:.4f}, new_scale={perceptual_scale:.5f}"
-    )
+    logger.debug(f"[Perceptual scale adjust] value={perceptual_value:.4f}, "
+                 f"new_scale={perceptual_scale:.5f}")
     return perceptual_scale
 
 
