@@ -201,6 +201,37 @@ def adjust_kl_bnn_scale(
     return kl_bnn_scale
 
 
+def adjust_perceptual_scale(
+    perceptual_value: float,
+    perceptual_scale: float,
+    target_perceptual: float = 1.0,
+    min_scale: float = 0.05,
+    max_scale: float = 0.30
+) -> float:
+    """
+    Adjust MFCC-based perceptual loss scale to control reconstruction fidelity.
+
+    Args:
+        perceptual_value (float): Current perceptual loss value.
+        perceptual_scale (float): Current perceptual loss scaling factor.
+        target_perceptual (float): Target MFCC loss value.
+        min_scale (float): Lower bound for scale.
+        max_scale (float): Upper bound for scale.
+
+    Returns:
+        float: Updated perceptual scale.
+    """
+    if perceptual_value > target_perceptual * 2.0:
+        perceptual_scale = max(min_scale, perceptual_scale * 0.9)
+    elif perceptual_value < target_perceptual * 0.5:
+        perceptual_scale = min(max_scale, perceptual_scale * 1.10)
+
+    logger.debug(
+        f"[Perceptual scale adjust] value={perceptual_value:.4f}, new_scale={perceptual_scale:.5f}"
+    )
+    return perceptual_scale
+
+
 def elbo_loss(
         recon_x: Tensor,
         x: Tensor,
@@ -215,9 +246,11 @@ def elbo_loss(
         auto_adjust_kl: bool = True,
         auto_adjust_stft: bool = True,
         auto_adjust_kl_bnn: bool = True,
+        auto_adjust_perceptual: bool = True,
         target_kl: float = 30.0,
         target_stft: float = 2.5,
-        target_kl_bnn: float = 1.0) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, float, float, float, float]:
+        target_kl_bnn: float = 1.0,
+        target_perceptual: float = 1.0) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, float, float, float, float]:
     """
         Compute the Evidence Lower Bound (ELBO) loss for a Bayesian VAE model with optional perceptual loss.
 
@@ -244,9 +277,11 @@ def elbo_loss(
             auto_adjust_kl (bool): Whether to adaptively adjust KL z weight
             auto_adjust_stft (bool): Whether to adaptively adjust STFT weight
             auto_adjust_kl_bnn (bool): Whether to adaptively adjust KL BNN weight
+            auto_adjust_perceptual (bool): Whether to adaptively adjust perceptual weight
             target_kl (float): Target KL z loss value
             target_stft (float): Target STFT loss value
             target_kl_bnn (float): Target KL BNN loss value
+            target_perceptual (float): Target Perceptual loss value
 
         Returns:
             Tuple:
@@ -280,6 +315,8 @@ def elbo_loss(
         stft_scale = adjust_stft_scale(stft_value, stft_scale, target_stft)
     if auto_adjust_kl_bnn:
         kl_bnn_scale = adjust_kl_bnn_scale(kl_bnn_value, kl_bnn_scale, target_kl_bnn)
+    if auto_adjust_perceptual:
+        perceptual_scale = adjust_perceptual_scale(perceptual_loss.item(), perceptual_scale, target_perceptual)
 
     total_loss = (
         mse_loss +
