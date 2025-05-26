@@ -1,0 +1,23 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# environment config
+.env
+*.log
+
+# OS dependant files
+.DS_Store
+Thumbs.db
+
+# build outputs
+/build/
+dist/
+*.egg-info/
+
+# data files
+*.wav
+*.pt
+data/
+
+test/
