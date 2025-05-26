@@ -104,9 +104,11 @@ def train(model: nn.Module,
             mse_loss = loss_outputs[1]
             stft_loss = loss_outputs[2]
             kl_z_loss = loss_outputs[3]
-            kl_z_scale = loss_outputs[4]
-            stft_scale = loss_outputs[5]
-            kl_bnn_scale = loss_outputs[6]
+            perceptual_loss = loss_outputs[4]
+            kl_z_scale = loss_outputs[5]
+            stft_scale = loss_outputs[6]
+            kl_bnn_scale = loss_outputs[7]
+            perceptual_scale = loss_outputs[8]
 
             if autodiff:
                 grads = torch.autograd.grad(total_elbo_loss, model.parameters())
@@ -158,10 +160,12 @@ def train(model: nn.Module,
                     kl_z_scale=kl_z_scale,
                     stft_scale=stft_scale,
                     kl_bnn_scale=kl_bnn_scale,
+                    perceptual_scale=perceptual_scale,
                     mse_loss=mse_loss.item(),
                     stft_loss=stft_loss.item(),
                     kl_z_loss=kl_z_loss.item(),
                     kl_bnn_loss=kl_bnn_loss.item(),
+                    perceptual_loss=perceptual_loss,
                     total_loss=total_elbo_loss.item(),
                     output_file=train_report_file)
 
@@ -177,7 +181,7 @@ def train(model: nn.Module,
         total_val_loss = 0
         snr_scores, stoi_scores, pesq_scores = [], [], []
         mu_stats, logvar_stats, z_stats, recon_stats = [], [], [], []
-        mse_losses, stft_losses, kl_z_losses, kl_bnn_losses, total_losses = [], [], [], [], []
+        mse_losses, stft_losses, kl_z_losses, kl_bnn_losses, perceptual_losses, total_losses = [], [], [], [], [], []
 
         with torch.no_grad():
             for noisy, clean in val_loader:
@@ -203,6 +207,7 @@ def train(model: nn.Module,
                     mse_loss = loss_outputs[1]
                     stft_loss = loss_outputs[2]
                     kl_z_loss = loss_outputs[3]
+                    perceptual_loss = loss_outputs[4]
                     mu_stats.append((mu.mean().item(), mu.std().item()))
                     logvar_stats.append((logvar.mean().item(), logvar.std().item()))
                     z_stats.append((z.mean().item(), z.std().item()))
@@ -211,6 +216,7 @@ def train(model: nn.Module,
                     stft_losses.append(stft_loss.item())
                     kl_z_losses.append(kl_z_loss.item())
                     kl_bnn_losses.append(kl_bnn_loss.item())
+                    perceptual_losses.append(perceptual_loss.item())
                     total_losses.append(total_elbo_loss.item())
 
                 for i in range(noisy.size(0)):
@@ -241,10 +247,10 @@ def train(model: nn.Module,
                 avg_pesq=sum(pesq_scores) / len(pesq_scores),
                 avg_snr=sum(snr_scores) / len(snr_scores),
                 mse_loss=sum(mse_losses) / len(mse_losses),
-
                 stft_loss=sum(stft_losses) / len(stft_losses),
                 kl_z_loss=sum(kl_z_losses) / len(kl_z_losses),
                 kl_bnn_loss=sum(kl_bnn_losses) / len(kl_bnn_losses),
+                perceptual_loss=sum(perceptual_losses) / len(perceptual_losses),
                 total_loss=sum(total_losses) / len(total_losses),
                 output_file=validation_report_file)
 

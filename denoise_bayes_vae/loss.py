@@ -4,9 +4,38 @@ from typing import Tuple, List
 import torch
 import torch.nn.functional as F
 from torch import Tensor
+from torchaudio.transforms import MFCC
+
 from utils.logger import Logger
 
 logger = Logger().get_logger()
+
+
+def mfcc_distance(x: Tensor, y: Tensor, sample_rate: int = 16000, n_mfcc: int = 13) -> Tensor:
+    """
+    Compute perceptual loss as L1 distance between MFCCs of two waveforms.
+
+    Args:
+        x (Tensor): Predicted waveform, shape (B, T)
+        y (Tensor): Ground truth waveform, shape (B, T)
+        sample_rate (int): Sampling rate in Hz (default: 16000)
+        n_mfcc (int): Number of MFCC coefficients to compute (default: 13)
+
+    Returns:
+        Tensor: Mean absolute error between MFCCs
+    """
+    device = x.device
+
+    mfcc_extractor = MFCC(
+        sample_rate=sample_rate,
+        n_mfcc=n_mfcc,
+        melkwargs={"n_fft": 512, "hop_length": 128, "n_mels": 40},
+    ).to(device)
+
+    x_mfcc = mfcc_extractor(x)
+    y_mfcc = mfcc_extractor(y)
+
+    return F.l1_loss(x_mfcc, y_mfcc)
 
 
 def log_stft_loss(
@@ -73,7 +102,7 @@ def adjust_kl_z_scale(
         kl_z_scale: float,
         epoch: int,
         target_kl: float = 30.0,
-        warmup_epochs: int = 10,
+        warmup_epochs: int = 5,
         max_scale: float = 0.3,
         min_scale: float = 1e-3) -> float:
     """
@@ -116,24 +145,35 @@ def adjust_kl_z_scale(
 def adjust_stft_scale(
         stft_value: float,
         stft_scale: float,
-        target_stft: float = 4.0) -> float:
+        target_stft: float = 4.0,
+        min_scale: float = 0.05,
+        max_scale: float = 0.30) -> float:
     """
-    Dynamically adjust STFT loss scale to balance perceptual fidelity.
+    Dynamically adjusts the STFT loss scale to balance perceptual fidelity during training.
+
+    This function monitors the current STFT loss (`stft_value`) and adaptively increases or
+    decreases the corresponding STFT loss weight (`stft_scale`) based on its deviation from
+    the target value. If the STFT loss is too low, the scale is increased to emphasize
+    frequency-domain accuracy. If too high, the scale is reduced to prevent overfitting
+    to spectral details.
 
     Args:
-        stft_value (float): Current STFT loss value.
-        stft_scale (float): Current STFT weight.
-        target_stft (float): Reference STFT value.
+        stft_value (float): Current STFT loss value for the batch or epoch.
+        stft_scale (float): Current scaling weight applied to the STFT loss term.
+        target_stft (float, optional): Desired STFT loss target. Default is 4.0.
+        min_scale (float, optional): Minimum allowed scale value. Default is 0.05.
+        max_scale (float, optional): Maximum allowed scale value. Default is 0.30.
 
     Returns:
-        float: Updated STFT weight.
+        float: Updated STFT loss scaling factor.
     """
     if stft_value > target_stft * 2.0:
-        stft_scale = max(0.05, stft_scale * 0.9)
+        stft_scale = max(min_scale, stft_scale * 0.9)
 
     elif stft_value < target_stft * 0.5:
-        stft_scale = min(0.30, stft_scale * 1.10)
+        stft_scale = min(max_scale, stft_scale * 1.10)
 
+    logger.debug(f"[STFT scale adjust] stft_value={stft_value:.4f}, new_scale={stft_scale:.5f}")
     return stft_scale
 
 
@@ -154,6 +194,7 @@ def adjust_kl_bnn_scale(
     """
     if kl_bnn_value > target_kl_bnn * 2.0:
         kl_bnn_scale = max(kl_bnn_scale * 0.8, 1e-6)
+
     elif kl_bnn_value < target_kl_bnn * 0.5:
         kl_bnn_scale = min(kl_bnn_scale * 1.2, 1e-2)
 
@@ -169,81 +210,94 @@ def elbo_loss(
         kl_bnn_loss: Tensor = None,
         kl_bnn_scale: float = 1e-3,
         stft_scale: float = 0.1,
+        perceptual_scale: float = 0.1,
         epoch: int = 1,
         auto_adjust_kl: bool = True,
         auto_adjust_stft: bool = True,
         auto_adjust_kl_bnn: bool = True,
         target_kl: float = 30.0,
         target_stft: float = 2.5,
-        target_kl_bnn: float = 1.0) -> Tuple[Tensor, Tensor, Tensor, Tensor, float, float, float]:
+        target_kl_bnn: float = 1.0) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, float, float, float, float]:
     """
-    Compute ELBO loss with multi-resolution STFT and adaptive weighting.
+        Compute the Evidence Lower Bound (ELBO) loss for a Bayesian VAE model with optional perceptual loss.
 
-    Args:
-        recon_x (Tensor): Reconstructed output.
-        x (Tensor): Target clean waveform.
-        mu (Tensor): Latent mean from encoder.
-        logvar (Tensor): Latent log-variance from encoder.
-        kl_z_scale (float): Weight for latent KL term.
-        kl_bnn_loss (Tensor): KL loss for Bayesian weights.
-        kl_bnn_scale (float): Weight for BNN KL term.
-        stft_scale (float): Weight for STFT loss.
-        epoch (int): Current epoch number.
-        auto_adjust_kl (bool): Enable adaptive KL scaling.
-        auto_adjust_stft (bool): Enable adaptive STFT scaling.
-        auto_adjust_kl_bnn (bool): Enable adaptive BNN KL scaling.
-        target_kl (float): Target value for KL divergence.
-        target_stft (float): Target value for STFT loss.
-        target_kl_bnn (float): Target value for BNN KL.
+        This function combines multiple loss components:
+        - Mean Squared Error (MSE) in the time domain
+        - Multi-resolution STFT loss in the frequency domain
+        - MFCC-based perceptual loss
+        - KL divergence for the latent variable z
+        - KL divergence for Bayesian weights (BNN)
 
-    Returns:
-        Tuple of total loss, MSE, STFT, KL_z, updated KL scale, STFT scale, BNN KL scale
+        Each loss component can be individually scaled and some have auto-adjusting mechanisms based on target values.
+
+        Args:
+            recon_x (Tensor): Reconstructed waveform of shape (B, T)
+            x (Tensor): Ground-truth clean waveform of shape (B, T)
+            mu (Tensor): Latent mean from encoder
+            logvar (Tensor): Latent log-variance from encoder
+            kl_z_scale (float): Weight for KL divergence of latent variable
+            kl_bnn_loss (Tensor): Precomputed KL divergence for Bayesian layers (if any)
+            kl_bnn_scale (float): Weight for BNN KL divergence term
+            stft_scale (float): Weight for STFT loss term
+            perceptual_scale (float): Weight for MFCC-based perceptual loss
+            epoch (int): Current training epoch (for annealing purposes)
+            auto_adjust_kl (bool): Whether to adaptively adjust KL z weight
+            auto_adjust_stft (bool): Whether to adaptively adjust STFT weight
+            auto_adjust_kl_bnn (bool): Whether to adaptively adjust KL BNN weight
+            target_kl (float): Target KL z loss value
+            target_stft (float): Target STFT loss value
+            target_kl_bnn (float): Target KL BNN loss value
+
+        Returns:
+            Tuple:
+                total_loss (Tensor): Combined loss
+                mse_loss (Tensor): MSE loss
+                stft_loss (Tensor): STFT loss
+                kl_z_loss (Tensor): Latent KL divergence
+                perceptual_loss (Tensor): MFCC-based perceptual loss
+                kl_z_scale (float): Final KL z scale used
+                stft_scale (float): Final STFT scale used
+                kl_bnn_scale (float): Final BNN KL scale used
+                perceptual_scale(float): Final MFCC-based perceptual scale used
     """
     if kl_bnn_loss is None:
         kl_bnn_loss = torch.tensor(0.0, device=x.device)
 
-    # Time-domain MSE loss
     mse_loss = F.mse_loss(recon_x, x, reduction="mean")
-
-    # Multi-resolution STFT loss
     stft_loss = multi_stft_loss(recon_x, x)
+    perceptual_loss = mfcc_distance(recon_x, x)  # MFCC-based perceptual loss
 
-    # Latent KL divergence
     kl_z_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
-    kl_z_loss = torch.clamp(kl_z_loss, min=1.0)  # free bits
+    kl_z_loss = torch.clamp(kl_z_loss, min=1.0)
 
-    # KL scaling update
     kl_z_value = kl_z_loss.detach().item()
     stft_value = stft_loss.detach().item()
     kl_bnn_value = kl_bnn_loss.detach().item()
 
     if auto_adjust_kl:
-        kl_z_scale = min(adjust_kl_z_scale(kl_z_value, kl_z_scale, epoch, target_kl), 0.3)
-        if epoch <= 5:
-            kl_z_scale = min(kl_z_scale, 10e-3)
-
+        kl_z_scale = adjust_kl_z_scale(kl_z_value, kl_z_scale, epoch, target_kl)
     if auto_adjust_stft:
         stft_scale = adjust_stft_scale(stft_value, stft_scale, target_stft)
-
     if auto_adjust_kl_bnn:
         kl_bnn_scale = adjust_kl_bnn_scale(kl_bnn_value, kl_bnn_scale, target_kl_bnn)
 
-    # Total ELBO loss
-    total_loss = mse_loss + (stft_scale * stft_loss) + (kl_z_scale * kl_z_loss) + (kl_bnn_scale * kl_bnn_loss)
+    total_loss = (
+        mse_loss +
+        (stft_scale * stft_loss) +
+        (perceptual_scale * perceptual_loss) +
+        (kl_z_scale * kl_z_loss) +
+        (kl_bnn_scale * kl_bnn_loss)
+    )
 
-    # Regularization to avoid collapse
     mu_penalty = torch.mean(torch.abs(mu))
     logvar_penalty = torch.mean(torch.abs(logvar))
     total_loss += 5e-4 * (mu_penalty + logvar_penalty)
 
     logger.debug(
-        f"[loss] mse={mse_loss:.5f}, "
-        f"stft={stft_value:.5f}, "
-        f"kl_z={kl_z_value:.5f}, "
-        f"kl_z_scale={kl_z_scale:.5f}, "
-        f"stft_scale={stft_scale:.5f}, "
-        f"kl_bnn_loss={kl_bnn_value:.5f} (scale={kl_bnn_scale:.5f}), "
+        f"[loss] mse={mse_loss:.5f}, stft={stft_value:.5f}, perceptual={perceptual_loss:.5f}, "
+        f"kl_z={kl_z_value:.5f}, kl_z_scale={kl_z_scale:.5f}, "
+        f"stft_scale={stft_scale:.5f}, kl_bnn={kl_bnn_value:.5f} (scale={kl_bnn_scale:.5f}), "
         f"total={total_loss:.5f}"
     )
 
-    return total_loss, mse_loss, stft_loss, kl_z_loss, kl_z_scale, stft_scale, kl_bnn_scale
+    return total_loss, mse_loss, stft_loss, kl_z_loss, perceptual_loss, kl_z_scale, stft_scale, kl_bnn_scale, perceptual_scale

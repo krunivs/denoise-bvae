@@ -2,21 +2,23 @@
 import os
 
 def generate_train_report(
-    mu,
-    logvar,
-    z,
-    recon,
-    recon_cos_sim_mean,
-    epoch,
-    kl_z_scale,
-    stft_scale,
-    kl_bnn_scale,
-    mse_loss=None,
-    stft_loss=None,
-    kl_z_loss=None,
-    kl_bnn_loss=None,
-    total_loss=None,
-    output_file=None):
+        mu,
+        logvar,
+        z,
+        recon,
+        recon_cos_sim_mean,
+        epoch,
+        kl_z_scale,
+        stft_scale,
+        kl_bnn_scale,
+        perceptual_scale,
+        mse_loss=None,
+        stft_loss=None,
+        kl_z_loss=None,
+        kl_bnn_loss=None,
+        perceptual_loss=None,
+        total_loss=None,
+        output_file=None):
     """
     Generate and log training statistics to monitor VAE collapse behaviors and loss dynamics.
 
@@ -41,10 +43,12 @@ def generate_train_report(
         kl_z_scale (float): Scaling weight for latent KL divergence loss
         stft_scale (float): Scaling weight for STFT loss
         kl_bnn_scale (float): Scaling weight for Bayesian weight prior KL loss
+        perceptual_scale(float): Scaling weight for MFCC-based perceptual loss
         mse_loss (float, optional): Current MSE loss value
         stft_loss (float, optional): Current STFT loss value
         kl_z_loss (float, optional): Current KL divergence loss for latent z
         kl_bnn_loss (float, optional): Current KL divergence loss for Bayesian weights
+        perceptual_loss (float): MFCC-based perceptual loss
         total_loss (float, optional): Current total ELBO loss
         output_file (str, optional): Path to TSV file to append logging information
 
@@ -75,10 +79,12 @@ def generate_train_report(
         "kl_z_scale": kl_z_scale,
         "stft_scale": stft_scale,
         "kl_bnn_scale": kl_bnn_scale,
+        "perceptual_scale": perceptual_scale,
         "mse_loss": float(mse_loss) if mse_loss is not None else -1,
         "stft_loss": float(stft_loss) if stft_loss is not None else -1,
         "kl_z_loss": float(kl_z_loss) if kl_z_loss is not None else -1,
         "kl_bnn_loss": float(kl_bnn_loss) if kl_bnn_loss is not None else -1,
+        "perceptual_loss": perceptual_loss if perceptual_loss is not None else -1,
         "total_loss": float(total_loss) if total_loss is not None else -1
     }
     if output_file is None:
@@ -111,6 +117,7 @@ def generate_validation_report(
         stft_loss: float = -1.0,
         kl_z_loss: float = -1.0,
         kl_bnn_loss: float = -1.0,
+        perceptual_loss: float = -1.0,
         total_loss: float = -1.0,
         output_file: str = None):
     """
@@ -137,6 +144,7 @@ def generate_validation_report(
         stft_loss (float, optional): STFT loss value (default: -1.0).
         kl_z_loss (float, optional): Latent KL divergence loss (default: -1.0).
         kl_bnn_loss (float, optional): KL loss from Bayesian layers (default: -1.0).
+        perceptual_loss (float, optional): MFCC-based Perceptual loss value (default: -1.0).
         total_loss (float, optional): Total ELBO loss (default: -1.0).
         output_file (str, optional): Path to the TSV output file.
 
@@ -172,6 +180,7 @@ def generate_validation_report(
         "stft_loss": stft_loss,
         "kl_z_loss": kl_z_loss,
         "kl_bnn_loss": kl_bnn_loss,
+        "perceptual_loss": perceptual_loss,
         "total_loss": total_loss,
     }
 
