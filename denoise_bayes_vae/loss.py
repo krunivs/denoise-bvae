@@ -134,10 +134,8 @@ def adjust_kl_z_scale(
         elif kl_z_value < target_kl * 0.5:
             updated_scale = min(kl_z_scale * 1.2, max_scale)
 
-    logger.debug(
-        f"[anneal] epoch={epoch}, raw_kl={kl_z_value:.4f}, "
-        f"updated_kl_z_scale={updated_scale:.5f}"
-    )
+    logger.debug(f"[anneal] epoch={epoch}, raw_kl={kl_z_value:.4f}, "
+                 f"updated_kl_z_scale={updated_scale:.5f}")
 
     return updated_scale
 
