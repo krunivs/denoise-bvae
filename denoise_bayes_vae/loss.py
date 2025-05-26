@@ -74,7 +74,7 @@ def adjust_kl_z_scale(
         epoch: int,
         target_kl: float = 30.0,
         warmup_epochs: int = 10,
-        max_scale: float = 1.0,
+        max_scale: float = 0.3,
         min_scale: float = 1e-3) -> float:
     """
     Adjust KL divergence scaling factor to prevent posterior collapse or explosion.
@@ -175,8 +175,7 @@ def elbo_loss(
         auto_adjust_kl_bnn: bool = True,
         target_kl: float = 30.0,
         target_stft: float = 2.5,
-        target_kl_bnn: float = 1.0,
-) -> Tuple[Tensor, Tensor, Tensor, Tensor, float, float, float]:
+        target_kl_bnn: float = 1.0) -> Tuple[Tensor, Tensor, Tensor, Tensor, float, float, float]:
     """
     Compute ELBO loss with multi-resolution STFT and adaptive weighting.
 
@@ -211,7 +210,7 @@ def elbo_loss(
 
     # Latent KL divergence
     kl_z_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
-    kl_z_loss = torch.clamp(kl_z_loss, min=5.0)  # free bits
+    kl_z_loss = torch.clamp(kl_z_loss, min=1.0)  # free bits
 
     # KL scaling update
     kl_z_value = kl_z_loss.detach().item()

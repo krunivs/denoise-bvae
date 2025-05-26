@@ -184,12 +184,14 @@ class Decoder(nn.Module):
         self.resblock = ResidualBlock(768)
 
         self.output_layer = nn.Sequential(
-            nn.ReLU(),
+            nn.LayerNorm(768),
+            nn.SiLU(),
             nn.Linear(768, 512),
-            nn.ReLU(),
-            nn.Linear(512, output_dim)
+            nn.SiLU(),
+            nn.Dropout(0.1),
+            nn.Linear(512, output_dim),
+            nn.Tanh()  # 안정된 출력 범위
         )
-
         self.postnet = ConvPostnet(output_dim)
 
         self.alpha = nn.Parameter(torch.tensor(0.5))  # Learnable gate
