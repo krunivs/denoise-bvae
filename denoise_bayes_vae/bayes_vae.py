@@ -178,19 +178,19 @@ class Decoder(nn.Module):
         self.bi_lstm = nn.LSTM(input_size=256,
                                hidden_size=64,
                                batch_first=True,
-                               bidirectional=True)  # 출력 shape: [B, T, 256]
+                               bidirectional=True)  # 출력 shape: [B, T, 128]
 
         # Conv1D Postnet으로 residual 보정
         self.deconv = nn.Sequential(
-            nn.Conv1d(256, 128, kernel_size=9, padding=4),
-            nn.ReLU(),
             nn.Conv1d(128, 64, kernel_size=9, padding=4),
             nn.ReLU(),
-            nn.Conv1d(64, 1, kernel_size=9, padding=4)  # → [B, 1, T]
+            nn.Conv1d(64, 32, kernel_size=9, padding=4),
+            nn.ReLU(),
+            nn.Conv1d(32, 1, kernel_size=9, padding=4)  # → [B, 1, T]
         )
 
         # base 출력을 output_dim과 동일하게 투영
-        self.base_proj = nn.Linear(256, output_dim)
+        self.base_proj = nn.Linear(128, output_dim)
 
         # skip connection
         self.skip_z = nn.Linear(latent_dim, output_dim)
@@ -211,14 +211,14 @@ class Decoder(nn.Module):
         # z 확장 후 LSTM 입력으로 반복 [B, T, 256]
         x = self.z_expand(z).unsqueeze(1).repeat(1, T, 1)
 
-        # BiLSTM 통과 → [B, T, 256]
+        # lstm_out: [B, T, 256] (bi-LSTM의 출력)
         lstm_out, _ = self.bi_lstm(x)
 
-        # Conv1D용 [B, 256, T]
+        # Conv1d에 넣기 위해 [B, C, T]로 permute
         lstm_out_1d = lstm_out.permute(0, 2, 1)  # [B, 256, T]
 
-        # Postnet 처리 → [B, 1, T] → squeeze → [B, T]
-        refined = self.deconv(lstm_out_1d).squeeze(1)
+        # 이제 Conv1d 적용 가능
+        refined = self.deconv(lstm_out_1d).squeeze(1)  # [B, T]
 
         # Base output: LSTM 요약 → Linear 투영 → [B, T]
         base = self.base_proj(lstm_out.mean(dim=1))
