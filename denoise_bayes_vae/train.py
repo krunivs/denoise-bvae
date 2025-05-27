@@ -69,9 +69,10 @@ def train(model: nn.Module,
     kl_z_losses, stft_losses, kl_bnn_losses = [], [], []
 
     # Initial weight scalars
-    kl_z_scale = 1e-3   # Scaling factor for KL divergence on latent z
-    stft_scale = 1.0    # Scaling factor for STFT loss
-    kl_bnn_scale = 1e-3 #  Scaling factor for kl_bnn_loss
+    kl_z_scale = 1e-3       # Scaling factor for KL divergence on latent z
+    stft_scale = 1.0        # Scaling factor for STFT loss
+    kl_bnn_scale = 1e-3     #  Scaling factor for kl_bnn_loss
+    perceptual_scale = 0.3  #  Scaling factor for perceptual_scale
 
     logger.info(f"Training started: kl_z_scale={kl_z_scale}, stft_scale={stft_scale}, kl_bnn_scale={kl_bnn_scale}")
     start_time = time.time()
@@ -98,6 +99,7 @@ def train(model: nn.Module,
                 kl_z_scale=kl_z_scale,
                 kl_bnn_loss=kl_bnn_loss,
                 kl_bnn_scale=kl_bnn_scale,
+                perceptual_scale=perceptual_scale,
                 stft_scale=stft_scale,
                 epoch=epoch + 1)
 
@@ -157,6 +159,8 @@ def train(model: nn.Module,
                     z=z,
                     recon=recon,
                     recon_cos_sim_mean=recon_cos_sim_mean,
+                    alpha=model.decoder.alpha.item(),
+                    skip_z=model.decoder.skip_z(z).norm().item(),
                     epoch=epoch + 1,
                     kl_z_scale=kl_z_scale,
                     stft_scale=stft_scale,

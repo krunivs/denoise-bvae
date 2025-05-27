@@ -194,8 +194,14 @@ class Decoder(nn.Module):
             nn.Dropout(0.1),
             nn.Linear(512, output_dim)
         )
-        self.postnet = ConvPostnet(output_dim)
-
+        # self.postnet = ConvPostnet(output_dim)
+        self.postnet = nn.Sequential(
+            nn.Conv1d(1, 64, kernel_size=9, padding=4),
+            nn.ReLU(),
+            nn.Conv1d(64, 64, kernel_size=9, padding=4),
+            nn.ReLU(),
+            nn.Conv1d(64, 1, kernel_size=9, padding=4)
+        )
         self.alpha = nn.Parameter(torch.tensor(0.5))  # Learnable gate
 
         for m in self.modules():
@@ -216,16 +222,19 @@ class Decoder(nn.Module):
         res = F.dropout(res, p=0.25, training=self.training)
 
         out = self.output_layer(res)        # [B, output_dim]
-        refined = self.postnet(out)         # Postnet now operates directly on output
+        # refined = self.postnet(out)         # Postnet now operates directly on output
+        refined = self.postnet(out.unsqueeze(1)).squeeze(1)  # Conv1D postnet 적용
 
         alpha = torch.sigmoid(self.alpha)
         if self.training and (alpha.item() < 0.1 or alpha.item() > 0.9):
             logger.warning(f"[Gating] alpha extreme: alpha={alpha.item():.3f}")
 
-        combined = out + alpha * (refined - out)  # Residual로 처리하여 collapse 완화
+        # combined = out + alpha * (refined - out)  # Residual로 처리하여 collapse 완화
+        combined = (1 - alpha) * out + alpha * refined  # gate residual
 
         if self.use_skip:
-            combined += 0.5 * self.skip_z(z)
+            # combined += 0.5 * self.skip_z(z)
+            combined += 0.7 * self.skip_z(z)  # skip 비중 상향
 
         if torch.isnan(combined).any():
             logger.error("NaN detected in final decoder output!")

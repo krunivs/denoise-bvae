@@ -239,7 +239,7 @@ def elbo_loss(
         kl_bnn_loss: Tensor = None,
         kl_bnn_scale: float = 1e-3,
         stft_scale: float = 0.1,
-        perceptual_scale: float = 0.1,
+        perceptual_scale: float = 0.3,
         epoch: int = 1,
         auto_adjust_kl: bool = True,
         auto_adjust_stft: bool = True,
