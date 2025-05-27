@@ -45,7 +45,7 @@ def generate_train_report(
         kl_z_scale (float): Scaling weight for latent KL divergence loss
         stft_scale (float): Scaling weight for STFT loss
         kl_bnn_scale (float): Scaling weight for Bayesian weight prior KL loss
-        perceptual_scale(float): Scaling weight for MFCC-based perceptual loss
+        perceptual_scale (float): Scaling weight for MFCC-based perceptual loss
         mse_loss (float, optional): Current MSE loss value
         stft_loss (float, optional): Current STFT loss value
         kl_z_loss (float, optional): Current KL divergence loss for latent z

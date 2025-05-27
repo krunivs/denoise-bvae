@@ -166,7 +166,7 @@ def train(model: nn.Module,
                     stft_loss=stft_loss.item(),
                     kl_z_loss=kl_z_loss.item(),
                     kl_bnn_loss=kl_bnn_loss.item(),
-                    perceptual_loss=perceptual_loss,
+                    perceptual_loss=perceptual_loss.item(),
                     total_loss=total_elbo_loss.item(),
                     output_file=train_report_file)
 
