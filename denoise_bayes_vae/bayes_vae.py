@@ -169,80 +169,43 @@ class Decoder(nn.Module):
         self.dist_type = dist_type
         self.df = df
         self.use_skip = use_skip
-        self.output_dim = output_dim
 
-        self.fc1 = BayesianLinear(latent_dim, 256, dist_type, df)
-        self.fc2 = BayesianLinear(256 + 128, 512, dist_type, df)
+        self.z_expand = nn.Linear(latent_dim, 256)
+        self.bi_lstm = nn.LSTM(input_size=256, hidden_size=128, num_layers=2, batch_first=True, bidirectional=True)
 
-        self.z_proj = nn.Sequential(
-            nn.Linear(latent_dim, 128),
-            nn.ReLU()
-        )
-        self.z_deep = nn.Sequential(
-            nn.Linear(latent_dim, 128),
-            nn.SiLU(),
-            nn.Linear(128, 128)
-        )
-        self.skip_z = nn.Linear(latent_dim, output_dim)
-        self.resblock = ResidualBlock(768)
-
-        self.output_layer = nn.Sequential(
-            nn.LayerNorm(768),
-            nn.SiLU(),
-            nn.Linear(768, 512),
-            nn.SiLU(),
-            nn.Dropout(0.1),
-            nn.Linear(512, output_dim)
-        )
-        # self.postnet = ConvPostnet(output_dim)
-        self.postnet = nn.Sequential(
-            nn.Conv1d(1, 64, kernel_size=9, padding=4),
+        self.deconv = nn.Sequential(
+            nn.Conv1d(256, 128, kernel_size=9, padding=4),
             nn.ReLU(),
-            nn.Conv1d(64, 64, kernel_size=9, padding=4),
+            nn.Conv1d(128, 64, kernel_size=9, padding=4),
             nn.ReLU(),
             nn.Conv1d(64, 1, kernel_size=9, padding=4)
         )
-        self.alpha = nn.Parameter(torch.tensor(0.5))  # Learnable gate
+
+        self.skip_z = nn.Linear(latent_dim, output_dim)
+        self.alpha = nn.Parameter(torch.tensor(0.5))
 
         for m in self.modules():
-            if isinstance(m, nn.Linear):
+            if isinstance(m, (nn.Linear, nn.Conv1d)):
                 nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
-                nn.init.constant_(m.bias, 0.0)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0.0)
 
     def forward(self, z):
-        z_proj = self.z_proj(z)
-        z_deep = self.z_deep(z)
-
-        z1 = F.dropout(F.relu(self.fc1(z)), p=0.15, training=self.training)
-        z1_concat = torch.cat([z1, z_proj], dim=-1)
-        z2 = F.relu(self.fc2(z1_concat))
-
-        fused = torch.cat([z2, z_proj, z_deep], dim=-1)
-        res = self.resblock(fused)
-        res = F.dropout(res, p=0.25, training=self.training)
-
-        out = self.output_layer(res)        # [B, output_dim]
-        # refined = self.postnet(out)         # Postnet now operates directly on output
-        refined = self.postnet(out.unsqueeze(1)).squeeze(1)  # Conv1D postnet 적용
+        x = self.z_expand(z).unsqueeze(1).repeat(1, 64, 1)
+        lstm_out, _ = self.bi_lstm(x)
+        lstm_out = lstm_out.transpose(1, 2)
+        refined = self.deconv(lstm_out).squeeze(1)
 
         alpha = torch.sigmoid(self.alpha)
-        if self.training and (alpha.item() < 0.1 or alpha.item() > 0.9):
-            logger.warning(f"[Gating] alpha extreme: alpha={alpha.item():.3f}")
-
-        # combined = out + alpha * (refined - out)  # Residual로 처리하여 collapse 완화
-        combined = (1 - alpha) * out + alpha * refined  # gate residual
+        combined = (1 - alpha) * lstm_out.mean(dim=1) + alpha * refined
 
         if self.use_skip:
-            # combined += 0.5 * self.skip_z(z)
-            combined += 0.7 * self.skip_z(z)  # skip 비중 상향
-
-        if torch.isnan(combined).any():
-            logger.error("NaN detected in final decoder output!")
+            combined += 0.5 * self.skip_z(z)
 
         return combined
 
     def kl_loss(self):
-        return self.fc1.kl_loss() + self.fc2.kl_loss()
+        return 0.0
 
 
 class BayesianVAE(nn.Module):
