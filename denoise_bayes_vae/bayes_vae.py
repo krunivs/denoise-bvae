@@ -169,21 +169,36 @@ class Decoder(nn.Module):
         self.dist_type = dist_type
         self.df = df
         self.use_skip = use_skip
+        self.output_dim = output_dim
 
+        # z를 확장하여 LSTM 입력에 맞게 변환
         self.z_expand = nn.Linear(latent_dim, 256)
-        self.bi_lstm = nn.LSTM(input_size=256, hidden_size=128, num_layers=2, batch_first=True, bidirectional=True)
 
+        # BiLSTM으로 시간 특성 보강
+        self.bi_lstm = nn.LSTM(input_size=256,
+                               hidden_size=64,
+                               batch_first=True,
+                               bidirectional=True)  # 출력 shape: [B, T, 256]
+
+        # Conv1D Postnet으로 residual 보정
         self.deconv = nn.Sequential(
             nn.Conv1d(256, 128, kernel_size=9, padding=4),
             nn.ReLU(),
             nn.Conv1d(128, 64, kernel_size=9, padding=4),
             nn.ReLU(),
-            nn.Conv1d(64, 1, kernel_size=9, padding=4)
+            nn.Conv1d(64, 1, kernel_size=9, padding=4)  # → [B, 1, T]
         )
 
+        # base 출력을 output_dim과 동일하게 투영
+        self.base_proj = nn.Linear(256, output_dim)
+
+        # skip connection
         self.skip_z = nn.Linear(latent_dim, output_dim)
+
+        # learnable gate
         self.alpha = nn.Parameter(torch.tensor(0.5))
 
+        # 가중치 초기화
         for m in self.modules():
             if isinstance(m, (nn.Linear, nn.Conv1d)):
                 nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
@@ -191,21 +206,35 @@ class Decoder(nn.Module):
                     nn.init.constant_(m.bias, 0.0)
 
     def forward(self, z):
-        x = self.z_expand(z).unsqueeze(1).repeat(1, 64, 1)
+        T = self.output_dim  # 출력 시간 길이 (예: 16000)
+
+        # z 확장 후 LSTM 입력으로 반복 [B, T, 256]
+        x = self.z_expand(z).unsqueeze(1).repeat(1, T, 1)
+
+        # BiLSTM 통과 → [B, T, 256]
         lstm_out, _ = self.bi_lstm(x)
-        lstm_out = lstm_out.transpose(1, 2)
-        refined = self.deconv(lstm_out).squeeze(1)
 
+        # Conv1D용 [B, 256, T]
+        lstm_out_1d = lstm_out.permute(0, 2, 1)  # [B, 256, T]
+
+        # Postnet 처리 → [B, 1, T] → squeeze → [B, T]
+        refined = self.deconv(lstm_out_1d).squeeze(1)
+
+        # Base output: LSTM 요약 → Linear 투영 → [B, T]
+        base = self.base_proj(lstm_out.mean(dim=1))
+
+        # gating
         alpha = torch.sigmoid(self.alpha)
-        combined = (1 - alpha) * lstm_out.mean(dim=1) + alpha * refined
+        combined = (1 - alpha) * base + alpha * refined
 
+        # skip_z 추가
         if self.use_skip:
             combined += 0.5 * self.skip_z(z)
 
         return combined
 
     def kl_loss(self):
-        return 0.0
+        return 0.0  # Decoder는 KL 없음 (BayesianLinear 없음)
 
 
 class BayesianVAE(nn.Module):

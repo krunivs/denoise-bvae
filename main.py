@@ -11,7 +11,7 @@ from denoise_bayes_vae.dataset import SpeechDatasetLoader
 from denoise_bayes_vae.test import denoise, load_model
 from denoise_bayes_vae.train import train
 from utils.audio_wav import save_wav
-from utils.device import get_compute_device
+from utils.device import get_compute_device, init_gpu_cache
 from utils.exception import get_exception_traceback
 from utils.file_utils import FileUtil
 from utils.logger import Logger
@@ -190,6 +190,7 @@ def main():
         exit(1)
 
     device = get_compute_device()
+    init_gpu_cache()
 
     ''' training mode '''
     if args.train:
