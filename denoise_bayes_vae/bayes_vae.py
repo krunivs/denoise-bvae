@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch import nn
 from denoise_bayes_vae.sample import sample_latent
 from utils.logger import Logger
+import torch.utils.checkpoint as cp
 
 logger = Logger().get_logger()
 
@@ -215,8 +216,14 @@ class Decoder(nn.Module):
         # z 확장 후 LSTM 입력으로 반복 [B, T, 256]
         x = self.z_expand(z).unsqueeze(1).repeat(1, T, 1)
 
+        # Gradient checkpointing 적용
+        def custom_lstm(x):
+            return self.bi_lstm(x)
+
         # lstm_out: [B, T, 256] (bi-LSTM의 출력)
-        lstm_out, _ = self.bi_lstm(x)
+        lstm_out, _ = cp.checkpoint(custom_lstm, x)
+
+        # lstm_out, _ = self.bi_lstm(x)
         lstm_out = self.dropout(lstm_out)   # Decoder 다양성 유지를 위한 dropout 도입
 
         # Conv1d에 넣기 위해 [B, C, T]로 permute
