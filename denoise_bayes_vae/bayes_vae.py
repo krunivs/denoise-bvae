@@ -151,7 +151,9 @@ class Encoder(nn.Module):
         mu = self.fc_mu(x)          # 256 → latent_dim
         logvar = self.fc_logvar(x)  # 256 → latent_dim
 
-        mu = torch.clamp(mu, min=-10.0, max=10.0)
+        # mu = torch.clamp(mu, min=-10.0, max=10.0)
+        mu = F.layer_norm(mu, mu.shape[1:])  # normalization 추가(mu에 대한 정규화는 posterior collapse 방지에 효과적)
+        mu = torch.clamp(mu, min=-5.0, max=5.0)  # 범위 완화
         logvar = torch.clamp(logvar, min=-10.0, max=5.0)
 
         if torch.isnan(mu).any() or torch.isnan(logvar).any():
@@ -192,6 +194,8 @@ class Decoder(nn.Module):
         # base 출력을 output_dim과 동일하게 투영
         self.base_proj = nn.Linear(128, output_dim)
 
+        self.dropout = nn.Dropout(0.1)
+
         # skip connection
         self.skip_z = nn.Linear(latent_dim, output_dim)
 
@@ -213,6 +217,7 @@ class Decoder(nn.Module):
 
         # lstm_out: [B, T, 256] (bi-LSTM의 출력)
         lstm_out, _ = self.bi_lstm(x)
+        lstm_out = self.dropout(lstm_out)   # Decoder 다양성 유지를 위한 dropout 도입
 
         # Conv1d에 넣기 위해 [B, C, T]로 permute
         lstm_out_1d = lstm_out.permute(0, 2, 1)  # [B, 256, T]
@@ -220,7 +225,7 @@ class Decoder(nn.Module):
         # 이제 Conv1d 적용 가능
         refined = self.deconv(lstm_out_1d).squeeze(1)  # [B, T]
 
-        # Base output: LSTM 요약 → Linear 투영 → [B, T]
+        # Base output: mean over time [B, 128] → Linear [B, output_dim=T]
         base = self.base_proj(lstm_out.mean(dim=1))
 
         # gating
@@ -229,7 +234,7 @@ class Decoder(nn.Module):
 
         # skip_z 추가
         if self.use_skip:
-            combined += 0.5 * self.skip_z(z)
+            combined += 0.8 * self.skip_z(z)
 
         return combined
 
