@@ -192,10 +192,15 @@ class Decoder(nn.Module):
             nn.Conv1d(32, 1, kernel_size=9, padding=4)  # → [B, 1, T]
         )
 
-        # base 출력을 output_dim과 동일하게 투영
-        self.base_proj = nn.Linear(128, output_dim)
+        # # base 출력을 output_dim과 동일하게 투영
+        # self.base_proj = nn.Linear(128, output_dim)
+        self.base_proj = nn.Sequential(
+            nn.Linear(128, 512),
+            nn.ReLU(),
+            nn.Linear(512, output_dim)
+        )
 
-        self.dropout = nn.Dropout(0.1)
+        self.dropout = nn.Dropout(0.3)
 
         # skip connection
         self.skip_z = nn.Linear(latent_dim, output_dim)
@@ -242,7 +247,7 @@ class Decoder(nn.Module):
 
         # skip_z 추가
         if self.use_skip:
-            combined += 0.8 * self.skip_z(z)
+            combined += 0.3 * self.skip_z(z)
 
         return combined
 
