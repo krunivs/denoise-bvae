@@ -215,6 +215,7 @@ class Decoder(nn.Module):
 
         # z 확장 후 LSTM 입력으로 반복 [B, T, 256]
         x = self.z_expand(z).unsqueeze(1).repeat(1, T, 1)
+        x.requires_grad_()  # gradient checkpointing requires this
 
         # Gradient checkpointing 적용
         def custom_lstm(x):
