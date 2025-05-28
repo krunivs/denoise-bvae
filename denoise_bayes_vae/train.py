@@ -74,9 +74,12 @@ def train(model: nn.Module,
     kl_bnn_scale = 0.001    #  Scaling factor for kl_bnn_loss
     perceptual_scale = 0.05 #  Scaling factor for perceptual_scale
 
-    logger.info(f"Training started: kl_z_scale={kl_z_scale}, stft_scale={stft_scale}, kl_bnn_scale={kl_bnn_scale}")
-    start_time = time.time()
+    logger.info(f"Training started: kl_z_scale={kl_z_scale}, "
+                f"stft_scale={stft_scale}, "
+                f"kl_bnn_scale={kl_bnn_scale}, "
+                f"perceptual_scale={perceptual_scale}")
 
+    start_time = time.time()
     torch.autograd.set_detect_anomaly(True)
 
     for epoch in range(epochs):
