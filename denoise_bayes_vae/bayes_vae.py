@@ -241,7 +241,7 @@ class Decoder(nn.Module):
             return self.bi_lstm(x)
 
         # lstm_out: [B, T, 256] (bi-LSTM의 출력)
-        lstm_out, _ = cp.checkpoint(custom_lstm, x)
+        lstm_out, _ = cp.checkpoint(custom_lstm, x, use_reentrant=False)
 
         # lstm_out, _ = self.bi_lstm(x)
         lstm_out = self.dropout(lstm_out)   # Decoder 다양성 유지를 위한 dropout 도입
