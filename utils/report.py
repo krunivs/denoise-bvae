@@ -10,7 +10,6 @@ def generate_train_report(
         recon,
         recon_cos_sim_mean,
         alpha,
-        skip_z,
         epoch,
         kl_z_scale,
         stft_scale,
@@ -44,7 +43,6 @@ def generate_train_report(
         recon (Tensor): Reconstructed output waveform (shape: [batch, time])
         recon_cos_sim_mean (float): Reconstructed output cosine similarity mean
         alpha (float): output weight for decoder
-        skip_z (float): skip z value in decoder
         epoch (int): Current training epoch (1-based)
         kl_z_scale (float): Scaling weight for latent KL divergence loss
         stft_scale (float): Scaling weight for STFT loss
@@ -83,7 +81,6 @@ def generate_train_report(
         "recon_std": recon.std().item(),
         "recon_cos_sim": recon_cos_sim_mean,
         "alpha": alpha,
-        "skip_z": skip_z,
         "kl_z_scale": kl_z_scale,
         "stft_scale": stft_scale,
         "kl_bnn_scale": kl_bnn_scale,

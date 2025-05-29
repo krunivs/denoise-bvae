@@ -276,7 +276,7 @@ class BayesianVAE(nn.Module):
         self.dist_type = dist_type
         self.df = df
         self.encoder = Encoder(latent_dim, dist_type, df)
-        self.decoder = Decoder(latent_dim, input_dim, dist_type, df)
+        self.decoder = Decoder(latent_dim, input_dim)
 
     def forward(self, x):
         mu, logvar = self.encoder(x)
