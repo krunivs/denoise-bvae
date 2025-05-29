@@ -128,14 +128,26 @@ class Encoder(nn.Module):
     """
     Encoder for Bayesian VAE(Variational AutoEncoder)
     """
-    def __init__(self, input_dim, latent_dim, dist_type='gaussian', df=3.0):
+    def __init__(self, latent_dim, dist_type='gaussian', df=3.0):
         super().__init__()
         self.dist_type = dist_type
         self.df = df
 
-        self.fc1 = BayesianLinear(input_dim, 512, dist_type, df)
-        self.fc2 = BayesianLinear(512, 512, dist_type, df)
-        self.fc3 = BayesianLinear(512, 256, dist_type, df)
+        # Conv1D 기반 feature extractor
+        self.conv = nn.Sequential(
+            nn.Conv1d(1, 64, kernel_size=9, stride=1, padding=4),  # [B, 1, T] → [B, 64, T]
+            nn.ReLU(),
+            nn.Conv1d(64, 128, kernel_size=9, stride=2, padding=4),  # [B, 64, T] → [B, 128, T/2]
+            nn.ReLU(),
+            nn.Conv1d(128, 256, kernel_size=9, stride=2, padding=4),  # [B, 128, T/2] → [B, 256, T/4]
+            nn.ReLU()
+        )
+
+        self.temporal_pool = nn.AdaptiveAvgPool1d(1)  # → [B, 256, 1]
+        self.linear_in = nn.Linear(256, 256)
+
+        # Fully connected Bayesian latent mapping
+        self.fc1 = BayesianLinear(256, 256, dist_type, df)
         self.fc_mu = nn.Linear(256, latent_dim)
         self.fc_logvar = nn.Linear(256, latent_dim)
 
@@ -146,13 +158,15 @@ class Encoder(nn.Module):
         nn.init.constant_(self.fc_logvar.bias, -1.0)
 
     def forward(self, x):
-        x = F.relu(self.fc1(x))     # input_dim → 512
-        x = F.relu(self.fc2(x))     # 512 → 512
-        x = F.relu(self.fc3(x))     # 512 → 256
-        mu = self.fc_mu(x)          # 256 → latent_dim
-        logvar = self.fc_logvar(x)  # 256 → latent_dim
+        x = x.unsqueeze(1)  # [B, T] → [B, 1, T]
+        x = self.conv(x)    # [B, 256, T/4]
+        x = self.temporal_pool(x).squeeze(-1)  # [B, 256]
+        x = F.relu(self.linear_in(x))
+        x = F.relu(self.fc1(x))
 
-        # mu = torch.clamp(mu, min=-10.0, max=10.0)
+        mu = self.fc_mu(x)
+        logvar = self.fc_logvar(x)
+
         mu = F.layer_norm(mu, mu.shape[1:])  # normalization 추가(mu에 대한 정규화는 posterior collapse 방지에 효과적)
         mu = torch.clamp(mu, min=-5.0, max=5.0)  # 범위 완화
         logvar = torch.clamp(logvar, min=-10.0, max=5.0)
@@ -163,7 +177,7 @@ class Encoder(nn.Module):
         return mu, logvar
 
     def kl_loss(self):
-        return self.fc1.kl_loss() + self.fc2.kl_loss()
+        return self.fc1.kl_loss()
 
 
 class Decoder(nn.Module):
@@ -218,8 +232,8 @@ class Decoder(nn.Module):
     def forward(self, z):
         T = self.output_dim  # 출력 시간 길이 (예: 16000)
 
-        # z 확장 후 LSTM 입력으로 반복 [B, T, 256]
-        x = self.z_expand(z).unsqueeze(1).repeat(1, T, 1)
+        # z 확장 후 dropout 적용 → Decoder regularization
+        x = self.dropout(self.z_expand(z)).unsqueeze(1).repeat(1, T, 1)
         x.requires_grad_()  # gradient checkpointing requires this
 
         # Gradient checkpointing 적용
@@ -269,7 +283,7 @@ class BayesianVAE(nn.Module):
         super().__init__()
         self.dist_type = dist_type
         self.df = df
-        self.encoder = Encoder(input_dim, latent_dim, dist_type, df)
+        self.encoder = Encoder(latent_dim, dist_type, df)
         self.decoder = Decoder(latent_dim, input_dim, dist_type, df)
 
     def forward(self, x):
