@@ -4,6 +4,7 @@ from typing import Tuple, List
 
 import torch
 import torch.nn.functional as F
+import torchaudio
 from torch import Tensor
 from torchaudio.transforms import MFCC
 
@@ -97,48 +98,99 @@ def multi_stft_loss(
 
     return loss / len(fft_sizes)
 
+def mel_stft_loss(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    sample_rate: int = 16000,
+    n_fft: int = 1024,
+    hop_length: int = 256,
+    n_mels: int = 80
+) -> torch.Tensor:
+    """
+    Compute the Mel-STFT (Mel-spectrogram) based spectral loss between two waveforms.
+    두 파형(음성 신호) 간의 Mel-spectrogram 기반 스펙트럼 손실(L1)을 계산합니다.
+
+    Args:
+        x (torch.Tensor): 복원(reconstructed) 파형 텐서, shape [B, T] (batch, time)
+        y (torch.Tensor): 정답(target) 파형 텐서, shape [B, T]
+        sample_rate (int): 오디오 샘플링 레이트 (기본값 16000)
+        n_fft (int): FFT 윈도우 크기 (기본값 1024)
+        hop_length (int): FFT hop length (기본값 256)
+        n_mels (int): Mel filter 개수 (기본값 80)
+
+    Returns:
+        torch.Tensor: batch별 평균 Mel-STFT loss (L1 distance of log-mel)
+    Example:
+        loss = mel_stft_loss(denoised, clean)
+    """
+    device = x.device
+    mel = torchaudio.transforms.MelSpectrogram(
+        sample_rate=sample_rate,
+        n_fft=n_fft,
+        hop_length=hop_length,
+        n_mels=n_mels,
+        center=True,
+        power=2.0,
+    ).to(device)
+
+    x_mel = mel(x)
+    y_mel = mel(y)
+
+    # dB로 변환 (log scale)
+    x_db = torch.log(x_mel + 1e-7)
+    y_db = torch.log(y_mel + 1e-7)
+
+    return F.l1_loss(x_db, y_db)
+
 
 def adjust_kl_z_scale(
         kl_z_value: float,
-        kl_z_scale: float,
         epoch: int,
         target_kl: float = 30.0,
-        warmup_epochs: int = 5,
+        warmup_epochs: int = 20,
         max_scale: float = 0.3,
-        min_scale: float = 1e-3) -> float:
+        min_scale: float = 1e-3,
+        method: str = 'linear',
+        kl_z_scale: float = None) -> float:
     """
-    Adjust KL divergence scaling factor to prevent posterior collapse or explosion.
+    KL annealing(warm-up)과 loss 기반 adaptive scaling을 통합.
+    초기엔 warm-up, 이후엔 adaptive scaling.
 
     Args:
-        kl_z_value (float): Current KL divergence value
-        kl_z_scale (float): Current KL weight
-        epoch (int): Current epoch
-        target_kl (float): Desired average KL divergence value
-        warmup_epochs (int): Epochs to gradually increase KL scale
-        max_scale (float): Maximum allowed KL scale
-        min_scale (float): Minimum allowed KL scale
-
+        kl_z_value (float): 현재 KL 값
+        epoch (int): 현재 epoch
+        target_kl (float): KL 타겟
+        warmup_epochs (int): warm-up 기간
+        max_scale (float): KL 스케일 upper bound
+        min_scale (float): KL 스케일 lower bound
+        method (str): 'linear' or 'sigmoid'
+        kl_z_scale (float or None): 현재 KL scale (후반부에 필요)
     Returns:
-        float: Adjusted KL z scale
+        float: 조정된 KL scale
     """
-    updated_scale = kl_z_scale
-
-    # Warm-up: linearly increase KL scale until max_scale
+    import math
+    # 1) Warm-up (schedule 기반)
     if epoch < warmup_epochs:
-        updated_scale = min(max_scale, (epoch + 1) / warmup_epochs * max_scale)
+        if method == 'sigmoid':
+            center = warmup_epochs // 2
+            steepness = 5.0 / warmup_epochs
+            scale = max_scale / (1 + math.exp(-steepness * (epoch - center)))
+        else:  # linear
+            scale = min(max_scale, (epoch + 1) / warmup_epochs * max_scale)
+
+        return max(min_scale, scale)
     else:
-        # Overshoot: KL too large → scale down
+        # 2) Adaptive scaling (target 기반)
+        if kl_z_scale is None:
+            kl_z_scale = max_scale
         if kl_z_value > target_kl * 2.0:
-            updated_scale = max(kl_z_scale * 0.5, min_scale)
-
-        # Undershoot: KL too small → scale up
+            scale = max(kl_z_scale * 0.5, min_scale)
         elif kl_z_value < target_kl * 0.5:
-            updated_scale = min(kl_z_scale * 1.2, max_scale)
+            scale = min(kl_z_scale * 1.2, max_scale)
+        else:
+            scale = kl_z_scale
 
-    logger.debug(f"[anneal] epoch={epoch}, raw_kl={kl_z_value:.4f}, "
-                 f"updated_kl_z_scale={updated_scale:.5f}")
-
-    return updated_scale
+        return scale
 
 
 def adjust_stft_scale(
@@ -205,8 +257,7 @@ def adjust_perceptual_scale(
     perceptual_scale: float,
     target_perceptual: float = 1.0,
     min_scale: float = 0.05,
-    max_scale: float = 0.30
-) -> float:
+    max_scale: float = 0.30) -> float:
     """
     Adjust MFCC-based perceptual loss scale to control reconstruction fidelity.
 
@@ -297,7 +348,7 @@ def elbo_loss(
         kl_bnn_loss = torch.tensor(0.0, device=x.device)
 
     mse_loss = F.mse_loss(recon_x, x, reduction="mean")
-    stft_loss = multi_stft_loss(recon_x, x)
+    stft_loss = 0.5 * multi_stft_loss(recon_x, x) + 0.5 * mel_stft_loss(recon_x, x)
     perceptual_loss = mfcc_distance(recon_x, x)  # MFCC-based perceptual loss
 
     kl_z_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
@@ -308,7 +359,10 @@ def elbo_loss(
     kl_bnn_value = kl_bnn_loss.detach().item()
 
     if auto_adjust_kl:
-        kl_z_scale = adjust_kl_z_scale(kl_z_value, kl_z_scale, epoch, target_kl)
+        kl_z_scale = adjust_kl_z_scale(
+            kl_z_value=kl_z_loss.item(),
+            epoch=epoch,
+            kl_z_scale=kl_z_scale)
     if auto_adjust_stft:
         stft_scale = adjust_stft_scale(stft_value, stft_scale, target_stft)
     if auto_adjust_kl_bnn:

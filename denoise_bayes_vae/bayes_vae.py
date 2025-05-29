@@ -179,94 +179,86 @@ class Encoder(nn.Module):
     def kl_loss(self):
         return self.fc1.kl_loss()
 
-
 class Decoder(nn.Module):
-    def __init__(self, latent_dim, output_dim, dist_type='gaussian', df=3.0, use_skip=True):
+    """
+    베이지안 VAE Decoder (성능 개선 구조)
+    - BiLSTM + Conv1D + Postnet 기반
+    - 학습 가능한 skip connection(gated fusion) 포함
+    - 모든 계층에 가중치 초기화 적용
+    """
+    def __init__(self, latent_dim, output_dim, use_skip=True):
         super().__init__()
-        self.dist_type = dist_type
-        self.df = df
-        self.use_skip = use_skip
+        self.use_skip = use_skip  # skip connection 사용 여부
+        self.latent_dim = latent_dim
         self.output_dim = output_dim
 
-        # z를 확장하여 LSTM 입력에 맞게 변환
-        self.z_expand = nn.Linear(latent_dim, 256)
+        # latent z를 FC로 변환 (feature 확장)
+        self.fc = nn.Linear(latent_dim, 256)
 
-        # BiLSTM으로 시간 특성 보강
-        self.bi_lstm = nn.LSTM(input_size=256,
-                               hidden_size=64,
-                               batch_first=True,
-                               bidirectional=True)  # 출력 shape: [B, T, 128]
-
-        # Conv1D Postnet으로 residual 보정
-        self.deconv = nn.Sequential(
-            nn.Conv1d(128, 64, kernel_size=9, padding=4),
-            nn.ReLU(),
-            nn.Conv1d(64, 32, kernel_size=9, padding=4),
-            nn.ReLU(),
-            nn.Conv1d(32, 1, kernel_size=9, padding=4)  # → [B, 1, T]
+        # BiLSTM으로 시간 정보/long-term dependency 보강
+        self.bi_lstm = nn.LSTM(
+            input_size=256, hidden_size=128,
+            num_layers=2, batch_first=True, bidirectional=True
         )
 
-        # # base 출력을 output_dim과 동일하게 투영
-        # self.base_proj = nn.Linear(128, output_dim)
-        self.base_proj = nn.Sequential(
-            nn.Linear(128, 512),
+        # Conv1D 계층: 시간 축 잔여 정보 보완
+        self.conv_layers = nn.Sequential(
+            nn.Conv1d(256, 128, kernel_size=5, padding=2),
             nn.ReLU(),
-            nn.Linear(512, output_dim)
+            nn.Conv1d(128, 64, kernel_size=5, padding=2),
+            nn.ReLU(),
+            nn.Conv1d(64, 1, kernel_size=5, padding=2)
         )
 
-        self.dropout = nn.Dropout(0.3)
+        # 학습 가능한 skip(z) → output_dim 투영 + gating 파라미터
+        if use_skip:
+            self.skip_proj = nn.Linear(latent_dim, output_dim)
+            self.alpha = nn.Parameter(torch.tensor(0.5))  # skip/base 혼합 비율 (학습됨)
 
-        # skip connection
-        self.skip_z = nn.Linear(latent_dim, output_dim)
+        # Postnet: 잔여 잡음 정제 및 품질 향상
+        self.postnet = nn.Sequential(
+            nn.Conv1d(1, 64, kernel_size=5, padding=2),
+            nn.Tanh(),
+            nn.Conv1d(64, 1, kernel_size=5, padding=2)
+        )
 
-        # learnable gate
-        self.alpha = nn.Parameter(torch.tensor(0.5))
-
-        # 가중치 초기화
+        # [가중치 초기화] 모든 Linear/Conv/LSTM 계층에 적용
         for m in self.modules():
             if isinstance(m, (nn.Linear, nn.Conv1d)):
-                nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
+                nn.init.kaiming_normal_(m.weight, nonlinearity='relu')  # ReLU 최적
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0.0)
+            elif isinstance(m, nn.LSTM):
+                for name, param in m.named_parameters():
+                    if 'weight' in name:
+                        nn.init.xavier_uniform_(param)  # LSTM 계층은 Xavier
+                    elif 'bias' in name:
+                        nn.init.constant_(param, 0.0)
 
     def forward(self, z):
-        T = self.output_dim  # 출력 시간 길이 (예: 16000)
+        # [1] latent z를 FC로 확장 후 (B, latent_dim) → (B, 1, 256)
+        x = self.fc(z).unsqueeze(1)
+        # [2] BiLSTM (B, 1, 256) → (B, 1, 256)
+        lstm_out, _ = self.bi_lstm(x)
+        # [3] Conv1D 입력 형상 맞춤 (B, 256, 1)
+        conv_input = lstm_out.transpose(1, 2)
+        # [4] Conv1D 계층 통과 (B, 1, 1 or T)
+        base_out = self.conv_layers(conv_input)
 
-        # z 확장 후 dropout 적용 → Decoder regularization
-        x = self.dropout(self.z_expand(z)).unsqueeze(1).repeat(1, T, 1)
-        x.requires_grad_()  # gradient checkpointing requires this
-
-        # Gradient checkpointing 적용
-        def custom_lstm(x):
-            return self.bi_lstm(x)
-
-        # lstm_out: [B, T, 256] (bi-LSTM의 출력)
-        lstm_out, _ = cp.checkpoint(custom_lstm, x, use_reentrant=False)
-
-        # lstm_out, _ = self.bi_lstm(x)
-        lstm_out = self.dropout(lstm_out)   # Decoder 다양성 유지를 위한 dropout 도입
-
-        # Conv1d에 넣기 위해 [B, C, T]로 permute
-        lstm_out_1d = lstm_out.permute(0, 2, 1)  # [B, 256, T]
-
-        # 이제 Conv1d 적용 가능
-        refined = self.deconv(lstm_out_1d).squeeze(1)  # [B, T]
-
-        # Base output: mean over time [B, 128] → Linear [B, output_dim=T]
-        base = self.base_proj(lstm_out.mean(dim=1))
-
-        # gating
-        alpha = torch.sigmoid(self.alpha)
-        combined = (1 - alpha) * base + alpha * refined
-
-        # skip_z 추가
+        # [5] skip connection과 gating (alpha: 학습 파라미터)
         if self.use_skip:
-            combined += 0.3 * self.skip_z(z)
+            skip_out = self.skip_proj(z).unsqueeze(1)  # (B, 1, T)
+            out = self.alpha * base_out + (1 - self.alpha) * skip_out
+        else:
+            out = base_out
 
-        return combined
+        # [6] Postnet을 통한 마지막 품질 정제
+        refined = self.postnet(out)
+        return refined.squeeze(1)  # (B, T)
 
     def kl_loss(self):
-        return 0.0  # Decoder는 KL 없음 (BayesianLinear 없음)
+        # Decoder에는 KL regularizer 없음
+        return 0.0
 
 
 class BayesianVAE(nn.Module):

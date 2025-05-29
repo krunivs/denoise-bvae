@@ -56,7 +56,10 @@ def compute_metrics(clean_waveform, enhanced_waveform, sr=16000):
 
         # Compute metrics
         snr = signal_noise_ratio(enhanced_waveform.unsqueeze(0), clean_waveform.unsqueeze(0)).item()
-        stoi_score = stoi(clean_np, enhanced_np, sr, extended=False)
+        try:
+            stoi_score = stoi(clean_np, enhanced_np, sr, extended=False)
+        except RuntimeWarning:
+            stoi_score = None
         pesq_score = pesq(sr, clean_np, enhanced_np, 'wb')
 
     except Exception as exc:
