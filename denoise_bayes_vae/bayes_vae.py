@@ -238,23 +238,37 @@ class Decoder(nn.Module):
     def forward(self, z):
         # [1] latent z를 FC로 확장 후 (B, latent_dim) → (B, 1, 256)
         x = self.fc(z).unsqueeze(1)
+
         # [2] BiLSTM (B, 1, 256) → (B, 1, 256)
         lstm_out, _ = self.bi_lstm(x)
+
         # [3] Conv1D 입력 형상 맞춤 (B, 256, 1)
         conv_input = lstm_out.transpose(1, 2)
+
         # [4] Conv1D 계층 통과 (B, 1, 1 or T)
         base_out = self.conv_layers(conv_input)
 
+        # base_out shape 강제: [B, 1, T] (T=output_dim)
+        if base_out.shape[-1] != self.output_dim:
+            # broadcast/expand/cut to output_dim
+            base_out = F.interpolate(base_out, size=self.output_dim, mode="linear", align_corners=False) \
+                if base_out.shape[-1] != 1 else base_out.repeat(1, 1, self.output_dim)
+
         # [5] skip connection과 gating (alpha: 학습 파라미터)
         if self.use_skip:
-            skip_out = self.skip_proj(z).unsqueeze(1)  # (B, 1, T)
-            out = self.alpha * base_out + (1 - self.alpha) * skip_out
+            skip_out = self.skip_proj(z).unsqueeze(1)  # [B, 1, T]
+            alpha = torch.sigmoid(self.alpha)
+            out = alpha * base_out + (1 - alpha) * skip_out
         else:
             out = base_out
 
-        # [6] Postnet을 통한 마지막 품질 정제
+        # [6] Postnet을 통한 마지막 품질 정제: [B, 1, T] -> [B, 1, T]
         refined = self.postnet(out)
-        return refined.squeeze(1)  # (B, T)
+
+        # 항상 [B, T]로 반환
+        refined = refined.squeeze(1)  # [B, 1, T] -> [B, T]
+
+        return refined
 
     def kl_loss(self):
         # Decoder에는 KL regularizer 없음
