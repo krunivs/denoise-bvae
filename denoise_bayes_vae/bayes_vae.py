@@ -267,7 +267,9 @@ class Decoder(nn.Module):
         refined = self.postnet(out)
         out = out + refined  # residual connection 추가
 
-        return out.squeeze(1)
+        out = out.squeeze(1) if out.shape[1] == 1 else out.mean(dim=1)
+
+        return out
 
     def kl_loss(self):
         return 0.0
