@@ -124,6 +124,8 @@ def train(model: nn.Module,
             else:
                 total_elbo_loss.backward()
 
+            # Gradient Clipping/Early Stopping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=3.0)
             optimizer.step()
             total_train_loss += total_elbo_loss.item()
             batch_size = recon.size(0)

@@ -378,7 +378,7 @@ def elbo_loss(
 
     mu_penalty = torch.mean(torch.abs(mu))
     logvar_penalty = torch.mean(torch.abs(logvar))
-    total_loss += 5e-4 * (mu_penalty + logvar_penalty)
+    total_loss += 2e-3 * (mu_penalty + logvar_penalty)
 
     logger.debug(
         f"[loss] mse={mse_loss:.5f}, stft={stft_value:.5f}, perceptual={perceptual_loss:.5f}, "

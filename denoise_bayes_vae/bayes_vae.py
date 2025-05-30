@@ -199,8 +199,11 @@ class Decoder(nn.Module):
 
         # BiLSTM으로 시간 정보/long-term dependency 보강
         self.bi_lstm = nn.LSTM(
-            input_size=256, hidden_size=128,
-            num_layers=2, batch_first=True, bidirectional=True
+            input_size=256,
+            hidden_size=128,
+            num_layers=2,
+            batch_first=True,
+            bidirectional=True
         )
 
         # Conv1D 계층: 시간 축 잔여 정보 보완
