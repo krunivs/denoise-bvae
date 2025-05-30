@@ -147,9 +147,9 @@ def adjust_kl_z_scale(
         kl_z_value: float,
         epoch: int,
         target_kl: float = 30.0,
-        warmup_epochs: int = 5,
-        max_scale: float = 0.1,
-        min_scale: float = 1e-2,
+        warmup_epochs: int = 20,
+        max_scale: float = 0.3,
+        min_scale: float = 0.05,
         method: str = 'linear',
         kl_z_scale: float = None) -> float:
     """
@@ -350,7 +350,7 @@ def elbo_loss(
     perceptual_loss = mfcc_distance(recon_x, x)  # MFCC-based perceptual loss
 
     kl_z_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
-    kl_z_loss = torch.clamp(kl_z_loss, min=1.0)
+    kl_z_loss = torch.clamp(kl_z_loss, min=0.1)
 
     kl_z_value = kl_z_loss.detach().item()
     stft_value = stft_loss.detach().item()
@@ -370,7 +370,7 @@ def elbo_loss(
 
     total_loss = (
             0.2 * mse_loss +
-            0.4 * stft_scale * stft_loss +
+            0.3 * stft_scale * stft_loss +
             0.2 * perceptual_scale * perceptual_loss +
             kl_z_scale * kl_z_loss +
             kl_bnn_scale * kl_bnn_loss

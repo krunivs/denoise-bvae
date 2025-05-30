@@ -239,7 +239,7 @@ def main():
                 logger.error('Not found model file {}.'.format(model_file_path))
                 exit(1)
             load_model(model, model_file_path, device)
-            learning_rate = 3e-3
+            learning_rate = 2e-4
 
             # set optimizer for fine-tuning
             optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=learning_rate)
@@ -248,7 +248,7 @@ def main():
             model = BayesianVAE(input_dim, latent_dim, pdf, df).to(device)
 
             # set optimizer for pre-tuning
-            learning_rate = 1e-4
+            learning_rate = 3e-3
             optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
         # set model, manifest, report filename
