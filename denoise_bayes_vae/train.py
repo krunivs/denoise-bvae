@@ -157,7 +157,6 @@ def train(model: nn.Module,
             # Generate train report
             if is_report_provided:
                 alpha_value = torch.sigmoid(model.decoder.alpha).item()
-
                 generate_train_report(
                     mu=mu,
                     logvar=logvar,
