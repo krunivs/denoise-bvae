@@ -147,9 +147,9 @@ def adjust_kl_z_scale(
         kl_z_value: float,
         epoch: int,
         target_kl: float = 30.0,
-        warmup_epochs: int = 20,
-        max_scale: float = 0.3,
-        min_scale: float = 1e-3,
+        warmup_epochs: int = 5,
+        max_scale: float = 0.1,
+        min_scale: float = 1e-2,
         method: str = 'linear',
         kl_z_scale: float = None) -> float:
     """
@@ -296,7 +296,6 @@ def elbo_loss(
         auto_adjust_stft: bool = True,
         auto_adjust_kl_bnn: bool = True,
         auto_adjust_perceptual: bool = True,
-        target_kl: float = 30.0,
         target_stft: float = 2.5,
         target_kl_bnn: float = 1.0,
         target_perceptual: float = 1.0) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor, float, float, float, float]:
@@ -327,7 +326,6 @@ def elbo_loss(
             auto_adjust_stft (bool): Whether to adaptively adjust STFT weight
             auto_adjust_kl_bnn (bool): Whether to adaptively adjust KL BNN weight
             auto_adjust_perceptual (bool): Whether to adaptively adjust perceptual weight
-            target_kl (float): Target KL z loss value
             target_stft (float): Target STFT loss value
             target_kl_bnn (float): Target KL BNN loss value
             target_perceptual (float): Target Perceptual loss value
@@ -371,11 +369,11 @@ def elbo_loss(
         perceptual_scale = adjust_perceptual_scale(perceptual_loss.item(), perceptual_scale, target_perceptual)
 
     total_loss = (
-        mse_loss +
-        (stft_scale * stft_loss) +
-        (perceptual_scale * perceptual_loss) +
-        (kl_z_scale * kl_z_loss) +
-        (kl_bnn_scale * kl_bnn_loss)
+            0.2 * mse_loss +
+            0.4 * stft_scale * stft_loss +
+            0.2 * perceptual_scale * perceptual_loss +
+            kl_z_scale * kl_z_loss +
+            kl_bnn_scale * kl_bnn_loss
     )
 
     mu_penalty = torch.mean(torch.abs(mu))

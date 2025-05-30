@@ -195,6 +195,8 @@ class Decoder(nn.Module):
         # latent z를 FC로 변환 (feature 확장)
         self.fc = nn.Linear(latent_dim, 256)
 
+        self.dropout = nn.Dropout(0.3)
+
         # BiLSTM으로 시간 정보/long-term dependency 보강
         self.bi_lstm = nn.LSTM(
             input_size=256, hidden_size=128,
@@ -205,8 +207,10 @@ class Decoder(nn.Module):
         self.conv_layers = nn.Sequential(
             nn.Conv1d(256, 128, kernel_size=5, padding=2),
             nn.ReLU(),
+            nn.Dropout(0.2),
             nn.Conv1d(128, 64, kernel_size=5, padding=2),
             nn.ReLU(),
+            nn.Dropout(0.2),
             nn.Conv1d(64, 1, kernel_size=5, padding=2)
         )
 
@@ -237,7 +241,8 @@ class Decoder(nn.Module):
 
     def forward(self, z):
         # [1] latent z를 FC로 확장 후 (B, latent_dim) → (B, 1, 256)
-        x = self.fc(z).unsqueeze(1)
+        x = self.fc(z)
+        x = self.dropout(x).unsqueeze(1)
 
         # [2] BiLSTM (B, 1, 256) → (B, 1, 256)
         lstm_out, _ = self.bi_lstm(x)
