@@ -148,7 +148,7 @@ def adjust_kl_z_scale(
         epoch: int,
         target_kl: float = 30.0,
         warmup_epochs: int = 20,
-        max_scale: float = 0.03,
+        max_scale: float = 0.01,
         min_scale: float = 0.001,
         method: str = 'linear',
         kl_z_scale: float = None) -> float:
@@ -257,7 +257,9 @@ def adjust_perceptual_scale(
     perceptual_scale: float,
     target_perceptual: float = 1.0,
     min_scale: float = 0.1,
-    max_scale: float = 0.3) -> float:
+    max_scale: float = 0.3,
+    epoch: int = 1
+) -> float:
     """
     Adjust MFCC-based perceptual loss scale to control reconstruction fidelity.
 
@@ -267,10 +269,14 @@ def adjust_perceptual_scale(
         target_perceptual (float): Target MFCC loss value.
         min_scale (float): Lower bound for scale.
         max_scale (float): Upper bound for scale.
+        epoch (int): Current training epoch for annealing.
 
     Returns:
         float: Updated perceptual scale.
     """
+    # Epoch-based annealing
+    perceptual_scale = max(perceptual_scale * (1 - epoch / 100), 0.05)
+
     if perceptual_value > target_perceptual * 2.0:
         perceptual_scale = max(min_scale, perceptual_scale * 0.9)
     elif perceptual_value < target_perceptual * 0.5:
@@ -278,6 +284,7 @@ def adjust_perceptual_scale(
 
     logger.debug(f"[Perceptual scale adjust] value={perceptual_value:.4f}, "
                  f"new_scale={perceptual_scale:.5f}")
+
     return perceptual_scale
 
 
@@ -410,7 +417,7 @@ def elbo_loss(
             0.2 * perceptual_scale * perceptual_loss +
             kl_z_scale * kl_z_loss +
             kl_bnn_scale * kl_bnn_loss -
-            0.05 * diversity_loss  # decoder 다양성 강제 강화
+            0.10 * diversity_loss
     )
 
     mu_penalty = torch.mean(torch.abs(mu))
@@ -423,8 +430,8 @@ def elbo_loss(
         f"stft_value={stft_value:.5f}, stft_scale={stft_scale:.5f}, "
         f"kl_bnn_value={kl_bnn_value:.5f}, kl_bnn_scale={kl_bnn_scale:.5f}, "                
         f"total_loss={total_loss:.5f}, "
-        f"[z] mu std={mu.std():.4f}, logvar std={logvar.std():.4f}, z std={z.std():.4f}"
-        f"[recon_x] std={recon_x.std():.4f}, mean={recon_x.mean():.4f}"
+        f"[z] mu std={mu.std():.4f}, logvar std={logvar.std():.4f}, z std={z.std():.4f}, "
+        f"[recon_x] std={recon_x.std():.4f}, mean={recon_x.mean():.4f}, "
         f"logvar_var={logvar_var:.5f}, diversity={diversity_loss:.5f}, total={total_loss:.5f}"
     )
 

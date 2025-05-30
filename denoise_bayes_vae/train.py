@@ -87,6 +87,7 @@ def train(model: nn.Module,
         epoch_start_time = time.time()
         model.train()
         model.decoder.use_skip = True
+        model.decoder.current_epoch = epoch
         total_train_loss = 0
 
         # batch
