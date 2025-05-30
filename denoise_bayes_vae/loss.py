@@ -148,8 +148,8 @@ def adjust_kl_z_scale(
         epoch: int,
         target_kl: float = 30.0,
         warmup_epochs: int = 20,
-        max_scale: float = 0.3,
-        min_scale: float = 0.05,
+        max_scale: float = 0.03,
+        min_scale: float = 0.001,
         method: str = 'linear',
         kl_z_scale: float = None) -> float:
     """
@@ -197,8 +197,8 @@ def adjust_stft_scale(
         stft_value: float,
         stft_scale: float,
         target_stft: float = 4.0,
-        min_scale: float = 0.05,
-        max_scale: float = 0.30) -> float:
+        min_scale: float = 0.1,
+        max_scale: float = 0.3) -> float:
     """
     Dynamically adjusts the STFT loss scale to balance perceptual fidelity during training.
 
@@ -256,8 +256,8 @@ def adjust_perceptual_scale(
     perceptual_value: float,
     perceptual_scale: float,
     target_perceptual: float = 1.0,
-    min_scale: float = 0.05,
-    max_scale: float = 0.30) -> float:
+    min_scale: float = 0.1,
+    max_scale: float = 0.3) -> float:
     """
     Adjust MFCC-based perceptual loss scale to control reconstruction fidelity.
 
@@ -281,11 +281,39 @@ def adjust_perceptual_scale(
     return perceptual_scale
 
 
+def decoder_diversity_loss(recon_x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """
+    Compute diversity loss on recon_x to penalize overly similar outputs.
+
+    This version penalizes high similarity between different examples in the batch.
+    If recon_x outputs are nearly identical (cosine_sim ~ 1), the loss will be high.
+
+    Args:
+        recon_x (Tensor): Reconstructed waveform [B, T]
+        eps (float): Small constant for numerical stability.
+
+    Returns:
+        Tensor: Scalar loss that increases when outputs become too similar.
+    """
+    B, T = recon_x.size()
+    recon_norm = F.normalize(recon_x, p=2, dim=1)  # [B, T], each row L2-normalized
+    sim_matrix = torch.matmul(recon_norm, recon_norm.T)  # [B, B]
+
+    # remove self-similarity (diagonal)
+    diversity_score = (sim_matrix.sum() - torch.trace(sim_matrix)) / (B * (B - 1) + eps)
+
+    # penalize high average similarity
+    loss = torch.clamp(diversity_score - 0.95, min=0.0) ** 2  # soft penalty if avg_sim > 0.95
+
+    return loss
+
+
 def elbo_loss(
         recon_x: Tensor,
         x: Tensor,
         mu: Tensor,
         logvar: Tensor,
+        z: Tensor,
         kl_z_scale: float = 1.0,
         kl_bnn_loss: Tensor = None,
         kl_bnn_scale: float = 1e-3,
@@ -316,6 +344,7 @@ def elbo_loss(
             x (Tensor): Ground-truth clean waveform of shape (B, T)
             mu (Tensor): Latent mean from encoder
             logvar (Tensor): Latent log-variance from encoder
+            z (Tensor): Latent z from encoder
             kl_z_scale (float): Weight for KL divergence of latent variable
             kl_bnn_loss (Tensor): Precomputed KL divergence for Bayesian layers (if any)
             kl_bnn_scale (float): Weight for BNN KL divergence term
@@ -360,6 +389,7 @@ def elbo_loss(
         kl_z_scale = adjust_kl_z_scale(
             kl_z_value=kl_z_loss.item(),
             epoch=epoch,
+            method='sigmoid',
             kl_z_scale=kl_z_scale)
     if auto_adjust_stft:
         stft_scale = adjust_stft_scale(stft_value, stft_scale, target_stft)
@@ -368,23 +398,34 @@ def elbo_loss(
     if auto_adjust_perceptual:
         perceptual_scale = adjust_perceptual_scale(perceptual_loss.item(), perceptual_scale, target_perceptual)
 
+    # logvar 다양성 유지 강제
+    logvar_var = torch.var(logvar)
+
+    # Decoder diversity 강화
+    diversity_loss = decoder_diversity_loss(recon_x)
+
     total_loss = (
             0.2 * mse_loss +
             0.3 * stft_scale * stft_loss +
             0.2 * perceptual_scale * perceptual_loss +
             kl_z_scale * kl_z_loss +
-            kl_bnn_scale * kl_bnn_loss
+            kl_bnn_scale * kl_bnn_loss -
+            0.05 * diversity_loss  # decoder 다양성 강제 강화
     )
 
     mu_penalty = torch.mean(torch.abs(mu))
-    logvar_penalty = torch.mean(torch.abs(logvar))
-    total_loss += 2e-3 * (mu_penalty + logvar_penalty)
+    logvar_abs_penalty = torch.mean(torch.abs(logvar))
+    total_loss += 2e-3 * (mu_penalty + logvar_abs_penalty)
 
     logger.debug(
-        f"[loss] mse={mse_loss:.5f}, stft={stft_value:.5f}, perceptual={perceptual_loss:.5f}, "
-        f"kl_z={kl_z_value:.5f}, kl_z_scale={kl_z_scale:.5f}, "
-        f"stft_scale={stft_scale:.5f}, kl_bnn={kl_bnn_value:.5f} (scale={kl_bnn_scale:.5f}), "
-        f"total={total_loss:.5f}"
+        f"[loss] mse_loss={mse_loss:.5f}, stft_loss={stft_loss:.5f}, perceptual_loss={perceptual_loss:.5f}, "
+        f"kl_z_value={kl_z_value:.5f}, kl_z_scale={kl_z_scale:.5f}, "
+        f"stft_value={stft_value:.5f}, stft_scale={stft_scale:.5f}, "
+        f"kl_bnn_value={kl_bnn_value:.5f}, kl_bnn_scale={kl_bnn_scale:.5f}, "                
+        f"total_loss={total_loss:.5f}, "
+        f"[z] mu std={mu.std():.4f}, logvar std={logvar.std():.4f}, z std={z.std():.4f}"
+        f"[recon_x] std={recon_x.std():.4f}, mean={recon_x.mean():.4f}"
+        f"logvar_var={logvar_var:.5f}, diversity={diversity_loss:.5f}, total={total_loss:.5f}"
     )
 
     return total_loss, mse_loss, stft_loss, kl_z_loss, perceptual_loss, kl_z_scale, stft_scale, kl_bnn_scale, perceptual_scale

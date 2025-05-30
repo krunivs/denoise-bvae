@@ -197,6 +197,12 @@ class Decoder(nn.Module):
 
         self.dropout = nn.Dropout(0.3)
 
+        self.z_proj = nn.Sequential(  # 추가: z 정보 주입 강화
+            nn.Linear(latent_dim, 128),
+            nn.SiLU(),
+            nn.Linear(128, 256)
+        )
+
         # BiLSTM으로 시간 정보/long-term dependency 보강
         self.bi_lstm = nn.LSTM(
             input_size=256,
@@ -214,17 +220,17 @@ class Decoder(nn.Module):
             nn.Conv1d(128, 64, kernel_size=5, padding=2),
             nn.ReLU(),
             nn.Dropout(0.2),
-            nn.Conv1d(64, 1, kernel_size=5, padding=2)
+            nn.Conv1d(64, 256, kernel_size=5, padding=2)
         )
 
         # 학습 가능한 skip(z) → output_dim 투영 + gating 파라미터
         if use_skip:
-            self.skip_proj = nn.Linear(latent_dim, output_dim)
-            self.alpha = nn.Parameter(torch.tensor(0.5))  # skip/base 혼합 비율 (학습됨)
+            self.skip_proj = nn.Linear(latent_dim, 256)
+            self.alpha = nn.Parameter(torch.tensor(0.05))  # skip/base 혼합 비율 (학습됨)
 
         # Postnet: 잔여 잡음 정제 및 품질 향상
         self.postnet = nn.Sequential(
-            nn.Conv1d(1, 64, kernel_size=5, padding=2),
+            nn.Conv1d(256, 64, kernel_size=5, padding=2),
             nn.Tanh(),
             nn.Conv1d(64, 1, kernel_size=5, padding=2)
         )
@@ -262,19 +268,22 @@ class Decoder(nn.Module):
             base_out = F.interpolate(base_out, size=self.output_dim, mode="linear", align_corners=False) \
                 if base_out.shape[-1] != 1 else base_out.repeat(1, 1, self.output_dim)
 
+        # z 정보 주입
+        z_context = self.z_proj(z).unsqueeze(2)  # (B, 256, 1)
+        base_out = base_out + z_context
+
         # [5] skip connection과 gating (alpha: 학습 파라미터)
         if self.use_skip:
-            skip_out = self.skip_proj(z).unsqueeze(1)  # [B, 1, T]
+            skip_out = self.skip_proj(z).unsqueeze(2)   # [B, 256, 1] → [B, 256, T]
+            skip_out = skip_out.expand(-1, -1, base_out.shape[-1])  # [B, 256, T]
             alpha = torch.sigmoid(self.alpha)
             out = alpha * base_out + (1 - alpha) * skip_out
         else:
             out = base_out
 
-        # [6] Postnet을 통한 마지막 품질 정제: [B, 1, T] -> [B, 1, T]
-        refined = self.postnet(out)
-
-        # 항상 [B, T]로 반환
-        refined = refined.squeeze(1)  # [B, 1, T] -> [B, T]
+        # [6] Postnet을 통한 마지막 품질 정제
+        refined = self.postnet(out)  # [B, 256, T]
+        refined = refined.squeeze(1)
 
         return refined
 

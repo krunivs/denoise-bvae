@@ -69,10 +69,10 @@ def train(model: nn.Module,
     kl_z_losses, stft_losses, kl_bnn_losses = [], [], []
 
     # Initial weight scalars
-    kl_z_scale = 1e-4        # Scaling factor for KL divergence on latent z
+    kl_z_scale = 0.005       # Scaling factor for KL divergence on latent z
     stft_scale = 1.0        # Scaling factor for STFT loss
-    kl_bnn_scale = 1e-3    #  Scaling factor for kl_bnn_loss
-    perceptual_scale = 0.3 #  Scaling factor for perceptual_scale
+    kl_bnn_scale = 1e-3     #  Scaling factor for kl_bnn_loss
+    perceptual_scale = 0.3  #  Scaling factor for perceptual_scale
 
     logger.info(f"Training started: kl_z_scale={kl_z_scale}, "
                 f"stft_scale={stft_scale}, "
@@ -98,7 +98,7 @@ def train(model: nn.Module,
             kl_bnn_loss = model.kl_loss() * kl_bnn_scale
 
             loss_outputs = elbo_loss(
-                recon, clean, mu, logvar,
+                recon, clean, mu, logvar, z,
                 kl_z_scale=kl_z_scale,
                 kl_bnn_loss=kl_bnn_loss,
                 kl_bnn_scale=kl_bnn_scale,
@@ -124,8 +124,6 @@ def train(model: nn.Module,
             else:
                 total_elbo_loss.backward()
 
-            # Gradient Clipping/Early Stopping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=3.0)
             optimizer.step()
             total_train_loss += total_elbo_loss.item()
             batch_size = recon.size(0)
@@ -200,7 +198,7 @@ def train(model: nn.Module,
                 kl_bnn_loss = model.kl_loss() * kl_bnn_scale
 
                 loss_outputs = elbo_loss(
-                    recon, clean, mu, logvar,
+                    recon, clean, mu, logvar, z,
                     kl_z_scale=kl_z_scale,
                     kl_bnn_loss=kl_bnn_loss,
                     kl_bnn_scale=kl_bnn_scale,
