@@ -193,8 +193,13 @@ class Decoder(nn.Module):
         self.latent_dim = latent_dim
         self.output_dim = output_dim
 
-        # latent z를 FC로 변환 (feature 확장)
-        self.fc = nn.Linear(latent_dim, 256)
+        # Linear feedforward
+        self.base = nn.Sequential(
+            nn.Linear(latent_dim, 256),
+            nn.SiLU(),
+            nn.LayerNorm(256),
+            nn.Linear(256, 256),
+        )
 
         # BiLSTM으로 시간 정보/long-term dependency 보강
         self.bi_lstm = nn.LSTM(
@@ -203,7 +208,7 @@ class Decoder(nn.Module):
         )
 
         # Conv1D 계층: 시간 축 잔여 정보 보완
-        self.conv_layers = nn.Sequential(
+        self.conv_post = nn.Sequential(
             nn.Conv1d(256, 128, kernel_size=5, padding=2),
             nn.ReLU(),
             nn.Conv1d(128, 64, kernel_size=5, padding=2),
@@ -212,9 +217,8 @@ class Decoder(nn.Module):
         )
 
         # 학습 가능한 skip(z) → output_dim 투영 + gating 파라미터
-        if use_skip:
-            self.skip_proj = nn.Linear(latent_dim, output_dim)
-            self.alpha = nn.Parameter(torch.tensor(0.5))  # skip/base 혼합 비율 (학습됨)
+        self.skip_z = nn.Linear(latent_dim, output_dim)
+        self.alpha = nn.Parameter(torch.tensor(0.5))
 
         # Postnet: 잔여 잡음 정제 및 품질 향상
         self.postnet = nn.Sequential(
@@ -225,57 +229,41 @@ class Decoder(nn.Module):
 
         # [가중치 초기화] 모든 Linear/Conv/LSTM 계층에 적용
         for m in self.modules():
-            if isinstance(m, (nn.Linear, nn.Conv1d)):
-                nn.init.kaiming_normal_(m.weight, nonlinearity='relu')  # ReLU 최적
+            if isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0.0)
+            elif isinstance(m, nn.Conv1d):
+                nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0.0)
             elif isinstance(m, nn.LSTM):
                 for name, param in m.named_parameters():
                     if 'weight' in name:
-                        nn.init.xavier_uniform_(param)  # LSTM 계층은 Xavier
+                        nn.init.xavier_uniform_(param)
                     elif 'bias' in name:
                         nn.init.constant_(param, 0.0)
 
     def forward(self, z):
-        # [1] latent z를 FC로 확장 후 (B, latent_dim) → (B, 1, 256)
-        x = self.fc(z).unsqueeze(1)
+        T = self.output_dim
 
-        # [2] BiLSTM (B, 1, 256) → (B, 1, 256)
-        lstm_out, _ = self.bi_lstm(x)
+        # Base path
+        base = self.base(z)
+        lstm_out, _ = self.bi_lstm(base.unsqueeze(1).repeat(1, T, 1))  # (B, T, 256)
+        lstm_out = lstm_out.transpose(1, 2)  # (B, 256, T)
+        out = self.conv_post(lstm_out)      # (B, output_dim, T)
 
-        # [3] Conv1D 입력 형상 맞춤 (B, 256, 1)
-        conv_input = lstm_out.transpose(1, 2)
+        # Skip connection path
+        skip = self.skip_z(z).unsqueeze(1).repeat(1, T, 1).transpose(1, 2)  # (B, output_dim, T)
+        alpha = torch.sigmoid(self.alpha)
+        out = alpha * out + (1 - alpha) * skip  # Gated fusion
 
-        # [4] Conv1D 계층 통과 (B, 1, 1 or T)
-        base_out = self.conv_layers(conv_input)
+        # Postnet refinement
+        out = self.postnet(out)  # (B, output_dim, T)
+        out = out.transpose(1, 2).contiguous()  # (B, T, output_dim)
+        out = out.squeeze(-1) if out.shape[-1] == 1 else out  # (B, T) if scalar output
 
-        # base_out shape 강제: [B, 1, T] (T=output_dim)
-        if base_out.shape[-1] != self.output_dim:
-            if base_out.shape[-1] == 1:
-                # 시간축 길이가 1이면 repeat로 확장
-                base_out = base_out.repeat(1, 1, self.output_dim)
-            else:
-                # 그 외에는 linear 보간으로 보정
-                base_out = F.interpolate(base_out, size=self.output_dim, mode="linear", align_corners=False)
-
-        # [5] skip connection과 gating (alpha: 학습 파라미터)
-        if self.use_skip:
-            skip_out = self.skip_proj(z).unsqueeze(1)  # [B, 1, T]
-            alpha = torch.sigmoid(self.alpha)
-            out = alpha * base_out + (1 - alpha) * skip_out
-        else:
-            out = base_out
-
-        # [6] Postnet을 통한 마지막 품질 정제: [B, 1, T] -> [B, 1, T]
-        refined = self.postnet(out)
-
-        if refined.shape[-1] != self.output_dim:
-            refined = F.interpolate(refined, size=self.output_dim, mode="linear", align_corners=False)
-
-        # 항상 [B, T]로 반환
-        refined = refined.squeeze(1)  # [B, 1, T] -> [B, T]
-
-        return refined
+        return out
 
     def kl_loss(self):
         # Decoder에는 KL regularizer 없음
@@ -302,7 +290,9 @@ class BayesianVAE(nn.Module):
     def forward(self, x):
         mu, logvar = self.encoder(x)
         z = sample_latent(mu, logvar, self.dist_type, self.df)
-        z = F.dropout(z, p=0.1, training=self.training)
+
+        if self.training:
+            z += (z + 0.01 * torch.randn_like(z)) # gaussian noise injection for latent diversity
 
         if torch.isnan(z).any() or z.std() > 10.0:
             logger.warning(f"[z warning] z has extreme std: {z.std().item():.4f}")

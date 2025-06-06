@@ -153,7 +153,7 @@ def adjust_kl_z_scale(
         warmup_epochs: int = 20,
         max_scale: float = 0.3,
         min_scale: float = 1e-3,
-        method: str = 'linear',
+        method: str = 'sigmoid',
         kl_z_scale: float = None) -> float:
     """
     KL annealing(warm-up)과 loss 기반 adaptive scaling을 통합.

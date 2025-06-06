@@ -80,9 +80,9 @@ def train(model: nn.Module,
 
     ''' Initial weight scalars '''
     # Scaling factor for KL divergence on latent z
-    kl_z_scale = 1e-4
+    kl_z_scale = 1e-3
     # Scaling factor for STFT loss
-    stft_scale = 1.0
+    stft_scale = 0.1
     # Scaling factor for kl_bnn_loss
     kl_bnn_scale = 1e-3
     # Scaling factor for perceptual_scale
