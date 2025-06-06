@@ -244,24 +244,26 @@ class Decoder(nn.Module):
                     elif 'bias' in name:
                         nn.init.constant_(param, 0.0)
 
-    def forward(self, z):
-        T = self.output_dim
+    def forward(self, z, target_length=None):
+        # 유연한 시퀀스 길이 처리
+        T = target_length if target_length is not None else self.output_dim
 
         # Base path
-        base = self.base(z)
-        lstm_out, _ = self.bi_lstm(base.unsqueeze(1).repeat(1, T, 1))  # (B, T, 256)
+        base = self.base(z)  # (B, 256)
+        lstm_input = base.unsqueeze(1).expand(-1, T, -1)  # (B, T, 256) 메모리 효율적인 broadcast
+        lstm_out, _ = self.bi_lstm(lstm_input)  # (B, T, 256)
         lstm_out = lstm_out.transpose(1, 2)  # (B, 256, T)
-        out = self.conv_post(lstm_out)      # (B, output_dim, T)
+        out = self.conv_post(lstm_out)  # (B, 1, T)
 
-        # Skip connection path
-        skip = self.skip_z(z).unsqueeze(1).repeat(1, T, 1).transpose(1, 2)  # (B, output_dim, T)
+        # Skip connection path (broadcasted expand로 개선)
+        skip = self.skip_z(z).unsqueeze(-1).expand(-1, -1, T)  # (B, 1, T)
         alpha = torch.sigmoid(self.alpha)
         out = alpha * out + (1 - alpha) * skip  # Gated fusion
 
         # Postnet refinement
-        out = self.postnet(out)  # (B, output_dim, T)
-        out = out.transpose(1, 2).contiguous()  # (B, T, output_dim)
-        out = out.squeeze(-1) if out.shape[-1] == 1 else out  # (B, T) if scalar output
+        out = self.postnet(out)  # (B, 1, T)
+        out = out.transpose(1, 2).contiguous()  # (B, T, 1)
+        out = out.squeeze(-1)  # (B, T)
 
         return out
 
@@ -300,7 +302,7 @@ class BayesianVAE(nn.Module):
         if mu.std() < 0.01 or logvar.std() < 0.01:
             logger.warning(f"[Collapse] mu.std={mu.std():.4f}, logvar.std={logvar.std():.4f}")
 
-        recon_x = self.decoder(z)
+        recon_x = self.decoder(z, target_length=x.size(1))  # x = (B, T)
 
         if torch.isnan(z).any():
             logger.error("NaN detected in latent z!")
