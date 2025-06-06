@@ -61,6 +61,9 @@ class ChunkedSpeechDataset(Dataset):
         if noisy.shape[1] < self.chunk_len:
             pad_len = self.chunk_len - noisy.shape[1]
             noisy = F.pad(noisy, (0, pad_len))
+
+        if clean.shape[1] < self.chunk_len:
+            pad_len = self.chunk_len - clean.shape[1]
             clean = F.pad(clean, (0, pad_len))
 
         return noisy.squeeze(0), clean.squeeze(0)
