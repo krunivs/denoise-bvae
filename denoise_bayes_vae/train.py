@@ -255,7 +255,7 @@ def train(model: nn.Module,
 
         # Validation loop
         model.eval()
-        model.decoder.use_skip = False
+        model.decoder.use_skip = True
         total_val_loss = 0
         total_mse_loss = 0
         total_stft_loss = 0

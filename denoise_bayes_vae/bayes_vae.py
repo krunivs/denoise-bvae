@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch import nn
 from denoise_bayes_vae.sample import sample_latent
 from utils.logger import Logger
-import torch.utils.checkpoint as cp
+# import torch.utils.checkpoint as cp
 
 logger = Logger().get_logger()
 
@@ -182,18 +182,18 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
     """
-    베이지안 VAE Decoder (성능 개선 구조)
-    - BiLSTM + Conv1D + Postnet 기반
-    - 학습 가능한 skip connection(gated fusion) 포함
-    - 모든 계층에 가중치 초기화 적용
+    Bayesian VAE Decoder (optimized for memory and performance)
+    - BiLSTM + Conv1D + Postnet architecture
+    - Optional skip connection with gated fusion
+    - Safe for long sequences to avoid CUDA OOM
     """
     def __init__(self, latent_dim, output_dim, use_skip=True):
         super().__init__()
-        self.use_skip = use_skip  # skip connection 사용 여부
+        self.use_skip = use_skip
         self.latent_dim = latent_dim
         self.output_dim = output_dim
 
-        # Linear feedforward
+        # Base MLP before LSTM
         self.base = nn.Sequential(
             nn.Linear(latent_dim, 256),
             nn.SiLU(),
@@ -201,13 +201,13 @@ class Decoder(nn.Module):
             nn.Linear(256, 256),
         )
 
-        # BiLSTM으로 시간 정보/long-term dependency 보강
+        # BiLSTM for long-term context
         self.bi_lstm = nn.LSTM(
             input_size=256, hidden_size=128,
             num_layers=2, batch_first=True, bidirectional=True
         )
 
-        # Conv1D 계층: 시간 축 잔여 정보 보완
+        # Conv1D layers for sequence refinement
         self.conv_post = nn.Sequential(
             nn.Conv1d(256, 128, kernel_size=5, padding=2),
             nn.ReLU(),
@@ -216,24 +216,24 @@ class Decoder(nn.Module):
             nn.Conv1d(64, 1, kernel_size=5, padding=2)
         )
 
-        # 학습 가능한 skip(z) → output_dim 투영 + gating 파라미터
-        self.skip_z = nn.Linear(latent_dim, output_dim)
+        # Lightweight skip connection (memory-efficient)
+        self.skip_z = nn.Linear(latent_dim, 1)
         self.alpha = nn.Parameter(torch.tensor(0.5))
 
-        # Postnet: 잔여 잡음 정제 및 품질 향상
+        # Postnet for residual enhancement
         self.postnet = nn.Sequential(
             nn.Conv1d(1, 64, kernel_size=5, padding=2),
             nn.Tanh(),
             nn.Conv1d(64, 1, kernel_size=5, padding=2)
         )
 
-        # [가중치 초기화] 모든 Linear/Conv/LSTM 계층에 적용
+        # Weight initialization
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0.0)
-            elif isinstance(m, nn.Conv1d):
+            elif isinstance(m, (nn.Conv1d, nn.ConvTranspose1d)):
                 nn.init.kaiming_normal_(m.weight, nonlinearity='relu')
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0.0)
@@ -245,30 +245,37 @@ class Decoder(nn.Module):
                         nn.init.constant_(param, 0.0)
 
     def forward(self, z, target_length=None):
-        # 유연한 시퀀스 길이 처리
         T = target_length if target_length is not None else self.output_dim
 
-        # Base path
+        # LSTM path
         base = self.base(z)  # (B, 256)
-        lstm_input = base.unsqueeze(1).expand(-1, T, -1)  # (B, T, 256) 메모리 효율적인 broadcast
-        lstm_out, _ = self.bi_lstm(lstm_input)  # (B, T, 256)
-        lstm_out = lstm_out.transpose(1, 2)  # (B, 256, T)
-        out = self.conv_post(lstm_out)  # (B, 1, T)
+        max_lstm_T = 2048  # limit length to avoid OOM
+        if T > max_lstm_T:
+            step = T // max_lstm_T
+            T_down = max_lstm_T
+            lstm_input = base.unsqueeze(1).expand(-1, T_down, -1)
+        else:
+            lstm_input = base.unsqueeze(1).expand(-1, T, -1)
 
-        # Skip connection path (broadcasted expand로 개선)
-        skip = self.skip_z(z).unsqueeze(-1).expand(-1, -1, T)  # (B, 1, T)
-        alpha = torch.sigmoid(self.alpha)
-        out = alpha * out + (1 - alpha) * skip  # Gated fusion
+        lstm_out, _ = self.bi_lstm(lstm_input)  # (B, T_down, 256)
+        lstm_out = lstm_out.transpose(1, 2)  # (B, 256, T_down)
 
-        # Postnet refinement
+        out = self.conv_post(lstm_out)  # (B, 1, T_down)
+        out = F.interpolate(out, size=T, mode='linear', align_corners=False)  # upsample if needed
+
+        # Skip connection (broadcasted scalar)
+        if self.use_skip:
+            skip = self.skip_z(z).unsqueeze(-1).expand(-1, 1, T)  # (B, 1, T)
+            alpha = torch.sigmoid(self.alpha)
+            out = alpha * out + (1 - alpha) * skip
+
+        # Postnet enhancement
         out = self.postnet(out)  # (B, 1, T)
-        out = out.transpose(1, 2).contiguous()  # (B, T, 1)
-        out = out.squeeze(-1)  # (B, T)
+        out = out.transpose(1, 2).contiguous().squeeze(-1)  # (B, T)
 
         return out
 
     def kl_loss(self):
-        # Decoder에는 KL regularizer 없음
         return 0.0
 
 
